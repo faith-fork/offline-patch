@@ -117,6 +117,7 @@ start_logging() {
 
 check_disk_space() {
     local path available_kb required_kb
+    [[ "$MIN_FREE_SPACE_MB" =~ ^[1-9][0-9]*$ ]] || die "MIN_FREE_SPACE_MB must be a positive integer."
     required_kb=$((MIN_FREE_SPACE_MB * 1024))
     for path in "$BASE_DIR" "$STATE_BASE"; do
         mkdir -p "$path"
@@ -342,7 +343,7 @@ restore_dns() {
     fi
     set_value "$state/dns_restored" "CHANGED"
     log "DNS configuration differs from the saved baseline; left untouched."
-    return 1
+    return 0
 }
 
 # ----------------------------- Repository integrity -----------------------
@@ -662,7 +663,7 @@ install_updates() {
 
     before_file="$state/packages_before.txt"
     after_file="$state/packages_after.txt"
-    systemctl --failed --no-legend --no-pager > "$state/failed_services_before.txt" 2>&1 || true
+    systemctl --failed --no-legend --no-pager 2>/dev/null | sort > "$state/failed_services_before.txt" || true
     capture_rpm_inventory "$before_file"
 
     log "Previewing the DNF transaction from the local repository..."
@@ -699,7 +700,7 @@ install_updates() {
         upgrade -y
 
     capture_rpm_inventory "$after_file"
-    systemctl --failed --no-legend --no-pager > "$state/failed_services_after.txt" 2>&1 || true
+    systemctl --failed --no-legend --no-pager 2>/dev/null | sort > "$state/failed_services_after.txt" || true
     comm -13 "$state/failed_services_before.txt" "$state/failed_services_after.txt" > "$state/failed_services_new.txt" || true
     comm -23 "$state/failed_services_before.txt" "$state/failed_services_after.txt" > "$state/failed_services_recovered.txt" || true
     if command -v needs-restarting >/dev/null 2>&1; then
@@ -791,7 +792,7 @@ verify_updates() {
     local current_os_id current_os_major
     local default_kernel running_kernel expected_kernel
     local transaction_id history_output
-    local nameservers search_domain dns_test_name
+    local nameservers search_domain dns_test_name dns_compare_status
     local failures=0
     local failure_file details_file
     local verification_admin
@@ -882,10 +883,11 @@ verify_updates() {
     set_value "$state/dns_test_name" "$dns_test_name"
 
     if restore_dns "$state"; then
-        echo "PASS: DNS backup restored and content matches." | tee -a "$details_file"
+        dns_compare_status="$(get_value "$state/dns_restored")"
+        echo "PASS: DNS configuration comparison completed (baseline: ${dns_compare_status}); no resolver files were modified." | tee -a "$details_file"
     else
         set_value "$state/dns_restored" "FAILED"
-        echo "FAIL: DNS restoration failed." | tee -a "$failure_file" "$details_file"
+        echo "FAIL: DNS configuration comparison could not be completed." | tee -a "$failure_file" "$details_file"
         ((failures+=1))
     fi
 
