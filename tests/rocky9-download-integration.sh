@@ -106,7 +106,7 @@ newest_state() {
 rpm_v1="$(build_fixture 1.0)"
 rpm_v2="$(build_fixture 2.0)"
 rpm_v3="$(build_fixture 3.0)"
-"$REAL_DNF" install -y "$rpm_v1" >/dev/null
+rpm -Uvh --quiet "$rpm_v1"
 repo_v2="$WORK/repo-v2"
 make_repo "$repo_v2" "$rpm_v2"
 CREATED_REPOS+=("$repo_v2")
@@ -139,7 +139,7 @@ echo "PASS: download-only fetched the enabled-repository update without installi
 echo "PASS: repository metadata, SHA256 manifest, file inventory and RPM inventory were created and verified."
 
 # 2. Install the fixture update, then verify a subsequent download records NO_UPDATES.
-"$REAL_DNF" --disablerepo='*' install -y "$repo_success/$(basename "$rpm_v2")" >/dev/null
+rpm -Uvh --quiet "$repo_success/$(basename "$rpm_v2")"
 run_download "$WORK/no-updates.log"
 state_no_updates="$(newest_state)"
 CREATED_STATES+=("$state_no_updates")
