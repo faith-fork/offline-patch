@@ -36,6 +36,7 @@ CONNECTIVITY_ATTEMPTS=3
 CONNECTIVITY_RETRY_DELAY=10
 DNF_TIMEOUT=30
 DNF_RETRIES=2
+MIN_FREE_SPACE_MB="${MIN_FREE_SPACE_MB:-2048}"
 
 # -------------------------------------------------------------------------
 
@@ -68,7 +69,7 @@ require_root() {
 check_commands() {
     local cmd
     for cmd in dnf rpm sha256sum awk sed grep sort comm hostname stat \
-               getent timeout flock date find basename readlink cp chmod \
+               getent timeout flock date find basename readlink cp chmod df \
                chown cat wc tr sleep xargs paste cmp id tee mkdir; do
         command -v "$cmd" >/dev/null 2>&1 ||
             die "Required command not found: $cmd"
@@ -105,6 +106,29 @@ get_admin() {
     fi
 }
 
+start_logging() {
+    local state="$1"
+    [[ -n "${LOGGING_STARTED:-}" ]] && return 0
+    touch "$state/run.log"
+    chmod 600 "$state/run.log"
+    LOGGING_STARTED=1
+    exec > >(tee -a "$state/run.log") 2>&1
+}
+
+check_disk_space() {
+    local path available_kb required_kb
+    required_kb=$((MIN_FREE_SPACE_MB * 1024))
+    for path in "$BASE_DIR" "$STATE_BASE"; do
+        mkdir -p "$path"
+        available_kb="$(df -Pk "$path" | awk 'NR==2 {print $4}')"
+        [[ "$available_kb" =~ ^[0-9]+$ ]] || die "Unable to determine free space for $path."
+        if ((available_kb < required_kb)); then
+            die "Insufficient free space on filesystem containing $path: ${available_kb} KiB available; ${required_kb} KiB required."
+        fi
+        log "Disk space check passed for $path: ${available_kb} KiB available."
+    done
+}
+
 get_state_dirs() {
     local status_filter="${1:-}"
     local dir status
@@ -135,7 +159,7 @@ select_state() {
     local filter="$1"
     local prompt="${2:-Select a patch run}"
     local -a states=()
-    local i choice status run
+    local state i choice status run
 
     while IFS= read -r state; do
         [[ -n "$state" ]] && states+=("$state")
@@ -389,6 +413,8 @@ generate_report() {
         echo "Repository path         : $(get_value "$state/repo_dir")"
         echo "RPM count               : $(get_value "$state/rpm_count")"
         echo "Repository checksum     : $(get_value "$state/repository_checksum_status")"
+        echo "Repository manifest hash: $(get_value "$state/repository_manifest_hash")"
+        echo "Run log                 : $state/run.log"
         echo
         echo "---------------------- Installation -------------------------"
         echo "Install started         : $(get_value "$state/install_started")"
@@ -397,6 +423,12 @@ generate_report() {
         echo "Kernel before install   : $(get_value "$state/kernel_before_install")"
         echo "Kernel after install    : $(get_value "$state/kernel_after_install")"
         echo "Expected boot kernel    : $(get_value "$state/kernel_expected")"
+        echo
+        echo "Failed services before  : $state/failed_services_before.txt"
+        echo "Failed services after   : $state/failed_services_after.txt"
+        echo "New failed services     : $state/failed_services_new.txt"
+        echo "Recovered services      : $state/failed_services_recovered.txt"
+        echo "Needs-restarting result : $(get_value "$state/needs_restarting_rc")"
         echo
         echo "Package changes:"
         if [[ -s "$state/package_changes.txt" ]]; then
@@ -489,6 +521,8 @@ download_updates() {
 
     create_new_state
     state="$ACTIVE_STATE"
+    start_logging "$state"
+    check_disk_space
     repo_dir="$(get_value "$state/repo_dir")"
 
     set_value "$state/inventory_username" "$admin_user"
@@ -596,6 +630,7 @@ install_updates() {
 
     state="$(select_state "DOWNLOADED" "Select a downloaded patch run")"
     ACTIVE_STATE="$state"
+    start_logging "$state"
 
     status="$(get_value "$state/status")"
     [[ "$status" == "DOWNLOADED" ]] || die "Selected run is not in DOWNLOADED status."
@@ -764,6 +799,7 @@ verify_updates() {
     state="$(select_state "INSTALLED_PENDING_REBOOT" "Select an installed patch run to verify")"
 
     ACTIVE_STATE="$state"
+    start_logging "$state"
     verification_admin="$(get_admin)"
     local attempt_stamp
     attempt_stamp="$(date '+%Y%m%d_%H%M%S')"
@@ -939,6 +975,7 @@ report_updates() {
     local state
 
     state="$(select_state "" "Select a patch run for the report")"
+    start_logging "$state"
     generate_report "$state"
 
     echo
