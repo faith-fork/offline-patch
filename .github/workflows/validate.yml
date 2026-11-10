@@ -34,7 +34,7 @@ jobs:
     steps:
       - name: Install parser tools
         run: |
-          dnf -y install bash coreutils findutils grep sed gawk
+          dnf -y install bash findutils grep sed gawk
       - name: Checkout
         uses: actions/checkout@v4
       - name: Validate script under Rocky Linux 9
