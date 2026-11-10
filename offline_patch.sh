@@ -668,17 +668,18 @@ install_updates() {
 
     log "Previewing the DNF transaction from the local repository..."
     preview_file="$state/dnf_transaction_preview.txt"
-    set +e
-    dnf \
+    if dnf \
         --disablerepo='*' \
         --repofrompath="${REPO_ID},file://${repo_dir}" \
         --enablerepo="$REPO_ID" \
         --setopt="${REPO_ID}.gpgcheck=0" \
         --setopt="${REPO_ID}.repo_gpgcheck=0" \
         --setopt=skip_if_unavailable=False \
-        upgrade --assumeno > "$preview_file" 2>&1
-    preview_rc=$?
-    set -e
+        upgrade --assumeno > "$preview_file" 2>&1; then
+        preview_rc=0
+    else
+        preview_rc=$?
+    fi
     cat "$preview_file"
     if ((preview_rc != 0)) && ! grep -Eqi 'Operation aborted|Transaction.*aborted|Nothing to do' "$preview_file"; then
         die "DNF transaction preview failed (exit code $preview_rc)."
