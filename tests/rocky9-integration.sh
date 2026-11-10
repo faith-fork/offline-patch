@@ -5,7 +5,7 @@ SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/offline_patch.sh"
 [[ -f "$SCRIPT" ]] || { echo "offline_patch.sh not found" >&2; exit 1; }
 [[ $EUID -eq 0 ]] || { echo "Run as root inside the disposable test container" >&2; exit 1; }
 
-dnf -y install bash dnf rpm-build createrepo_c dnf-plugins-core diffutils findutils grep sed gawk util-linux-core coreutils
+dnf -y install bash dnf rpm-build createrepo_c dnf-plugins-core diffutils findutils grep sed gawk util-linux-core
 WORK="$(mktemp -d /tmp/offline-patch-it.XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
 TOP="$WORK/rpmbuild"
