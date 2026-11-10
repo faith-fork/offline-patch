@@ -34,8 +34,23 @@ jobs:
     steps:
       - name: Install parser tools
         run: |
-          dnf -y install bash findutils grep sed gawk
+          dnf -y install bash diffutils findutils grep sed gawk
       - name: Checkout
         uses: actions/checkout@v4
       - name: Validate script under Rocky Linux 9
         run: bash -n offline_patch.sh
+      - name: Smoke-test command prerequisites and help output
+        shell: bash
+        run: |
+          set +e
+          ./offline_patch.sh > smoke-test.out 2>&1
+          rc=$?
+          set -e
+          if [[ "$rc" -ne 1 ]]; then
+            cat smoke-test.out
+            echo "Expected help path to exit with status 1; got $rc"
+            exit 1
+          fi
+          grep -q "Offline Patch Management Script" smoke-test.out
+          grep -q "Rocky Linux, RHEL, AlmaLinux and Oracle Linux 8 and 9" smoke-test.out
+          echo "PASS: prerequisite checks and help path executed on Rocky Linux 9."
