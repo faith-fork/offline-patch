@@ -43,7 +43,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          bash ./offline_patch.sh > smoke-test.out 2>&1
+          ./offline_patch.sh > smoke-test.out 2>&1
           rc=$?
           set -e
           cat smoke-test.out
