@@ -54,3 +54,14 @@ jobs:
           grep -q "Offline Patch Management Script" smoke-test.out
           grep -q "Rocky Linux, RHEL, AlmaLinux and Oracle Linux 8 and 9" smoke-test.out
           echo "PASS: prerequisite checks and help path executed on Rocky Linux 9."
+
+  rocky-9-dnf-integration:
+    runs-on: ubuntu-latest
+    container:
+      image: rockylinux:9
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Run disposable local-RPM integration tests
+        shell: bash
+        run: bash tests/rocky9-integration.sh
