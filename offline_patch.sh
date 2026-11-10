@@ -791,7 +791,7 @@ verify_updates() {
     local state current_boot_id previous_boot_id
     local current_os_id current_os_major
     local default_kernel running_kernel expected_kernel
-    local transaction_id history_output
+    local transaction_id
     local nameservers search_domain dns_test_name dns_compare_status
     local failures=0
     local failure_file details_file
