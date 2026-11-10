@@ -68,3 +68,17 @@ jobs:
       - name: Run disposable local-RPM integration test
         shell: bash
         run: bash tests/rocky9-dnf-integration.sh
+
+  rocky-9-download-integration:
+    runs-on: ubuntu-latest
+    container:
+      image: rockylinux:9
+    steps:
+      - name: Install download-test tools
+        run: |
+          dnf -y install bash dnf rpm-build createrepo_c dnf-plugins-core diffutils findutils grep sed gawk
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Run download workflow integration tests
+        shell: bash
+        run: bash tests/rocky9-download-integration.sh
