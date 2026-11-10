@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Disposable Rocky Linux 9 integration test for offline_patch.sh.
-# Runs only inside an ephemeral CI container; never use on a production host.
+# Disposable Rocky Linux 9 integration tests. CI container only.
 set -Eeuo pipefail
 
 SCRIPT="${GITHUB_WORKSPACE:-$(pwd)}/offline_patch.sh"
@@ -8,12 +7,13 @@ WORK="$(mktemp -d /tmp/offline-patch-it.XXXXXX)"
 STATE_BASE="/var/lib/offline-patching"
 HOST="$(hostname -s)"
 RUN_ID="ci-integration-$$"
-STATE="$STATE_BASE/$HOST/$RUN_ID"
-REPO="$WORK/repo"
+STATE_ROOT="$STATE_BASE/$HOST"
 BUILD="$WORK/rpmbuild"
+REAL_DNF="$(command -v dnf)"
+mkdir -p "$BUILD"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS} "$STATE_ROOT"
 
 cleanup() {
-  rm -rf "$WORK" "$STATE"
+  rm -rf "$WORK" "$STATE_ROOT/$RUN_ID"* 
 }
 trap cleanup EXIT
 
@@ -21,12 +21,15 @@ for cmd in dnf rpm rpmbuild createrepo_c sha256sum awk sort find hostname uname;
   command -v "$cmd" >/dev/null 2>&1 || { echo "Missing test prerequisite: $cmd"; exit 1; }
 done
 
-mkdir -p "$BUILD"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS} "$REPO" "$STATE"
+source /etc/os-release
+OS_MAJOR="${VERSION_ID%%.*}"
+ARCH="$(uname -m)"
+
 cat > "$BUILD/SPECS/offline-patch-fixture.spec" <<'SPEC'
 Name: offline-patch-fixture
 Version: %{?fixture_version}
 Release: 1%{?dist}
-Summary: Disposable package used by offline patch integration tests
+Summary: Disposable package used by offline-patch integration tests
 License: MIT
 BuildArch: noarch
 
@@ -35,55 +38,122 @@ Disposable fixture package for the offline-patch CI integration test.
 
 %install
 mkdir -p %{buildroot}/usr/share/offline-patch-fixture
-printf '%s\n' '%{version}' > %{buildroot}/usr/share/offline-patch-fixture/version.txt
+printf '%s\\n' '%{version}' > %{buildroot}/usr/share/offline-patch-fixture/version.txt
 
 %files
 /usr/share/offline-patch-fixture/version.txt
 SPEC
 
-rpmbuild --define "_topdir $BUILD" --define "fixture_version 1.0" -bb "$BUILD/SPECS/offline-patch-fixture.spec"
-dnf install -y "$BUILD/RPMS/noarch/offline-patch-fixture-1.0-1"*.rpm
-rpmbuild --define "_topdir $BUILD" --define "fixture_version 2.0" -bb "$BUILD/SPECS/offline-patch-fixture.spec"
-cp "$BUILD/RPMS/noarch/offline-patch-fixture-2.0-1"*.rpm "$REPO/"
-createrepo_c "$REPO"
-
-(
-  cd "$REPO"
-  find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 -r sha256sum > SHA256SUMS
-)
-sha256sum "$REPO/SHA256SUMS" | awk '{print $1}' > "$STATE/repository_manifest_hash"
-(
-  cd "$REPO"
-  find . -type f ! -name SHA256SUMS -printf '%P\n' | sort
-) > "$STATE/repository_file_list.txt"
-
-# Match the state format consumed by select_state()/install_updates().
-source /etc/os-release
-printf '%s\n' DOWNLOADED > "$STATE/status"
-printf '%s\n' "$REPO" > "$STATE/repo_dir"
-printf '%s\n' "$ID" > "$STATE/os_id"
-printf '%s\n' "${VERSION_ID%%.*}" > "$STATE/os_major"
-printf '%s\n' "$(uname -m)" > "$STATE/arch"
-printf '%s\n' 1 > "$STATE/rpm_count"
-printf '%s\n' CREATED > "$STATE/repository_checksum_status"
-
-echo "yes" | bash "$SCRIPT" install
-
-installed_version="$(rpm -q --qf '%{VERSION}' offline-patch-fixture)"
-[[ "$installed_version" == "2.0" ]] || {
-  echo "Expected fixture package version 2.0; got $installed_version"
-  exit 1
+build_fixture() {
+  local version="$1"
+  rpmbuild --define "_topdir $BUILD" --define "fixture_version $version" -bb "$BUILD/SPECS/offline-patch-fixture.spec" >/dev/null
+  printf '%s\n' "$BUILD/RPMS/noarch/offline-patch-fixture-$version-1.el9.noarch.rpm"
 }
-[[ "$(cat "$STATE/status")" == "INSTALLED_PENDING_REBOOT" ]] || {
-  echo "Expected lifecycle status INSTALLED_PENDING_REBOOT"
-  exit 1
+
+make_repo() {
+  local repo="$1" rpm_file="$2"
+  mkdir -p "$repo"
+  cp "$rpm_file" "$repo/"
+  createrepo_c "$repo" >/dev/null
 }
-[[ -s "$STATE/dnf_transaction_preview.txt" ]] || {
-  echo "DNF transaction preview was not recorded"
-  exit 1
+
+make_state() {
+  local state="$1" repo="$2"
+  mkdir -p "$state"
+  (
+    cd "$repo"
+    find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 -r sha256sum > SHA256SUMS
+    find . -type f ! -name SHA256SUMS -printf '%P\\n' | sort
+  ) > "$state/repository_file_list.txt"
+  sha256sum "$repo/SHA256SUMS" | awk '{print $1}' > "$state/repository_manifest_hash"
+  printf '%s\n' DOWNLOADED > "$state/status"
+  printf '%s\n' "$repo" > "$state/repo_dir"
+  printf '%s\n' "$ID" > "$state/os_id"
+  printf '%s\n' "$OS_MAJOR" > "$state/os_major"
+  printf '%s\n' "$ARCH" > "$state/arch"
+  printf '%s\n' 1 > "$state/rpm_count"
+  printf '%s\n' CREATED > "$state/repository_checksum_status"
 }
-[[ -s "$STATE/packages_added.txt" ]] || {
-  echo "Package change inventory was not recorded"
-  exit 1
+
+expect_install_failure() {
+  local expected_status="$1"
+  set +e
+  echo yes | bash "$SCRIPT" install > "$WORK/expected-failure.log" 2>&1
+  local rc=$?
+  set -e
+  cat "$WORK/expected-failure.log"
+  [[ "$rc" -ne 0 ]] || { echo "Expected install to fail"; exit 1; }
+  [[ "$(cat "$CURRENT_STATE/status")" == "$expected_status" ]] || {
+    echo "Expected state $expected_status; got $(cat "$CURRENT_STATE/status")"
+    exit 1
+  }
 }
-echo "PASS: local-only DNF upgrade, transaction preview, inventory and state transitions."
+
+# Establish a known baseline package version.
+rpm_v1="$(build_fixture 1.0)"
+dnf install -y "$rpm_v1" >/dev/null
+rpm_v2="$(build_fixture 2.0)"
+repo_v2="$WORK/repo-v2"
+make_repo "$repo_v2" "$rpm_v2"
+
+# 1. Repository tampering must block installation before DNF changes packages.
+CURRENT_STATE="$STATE_ROOT/$RUN_ID-tamper"
+make_state "$CURRENT_STATE" "$repo_v2"
+printf 'tamper' >> "$repo_v2/$(basename "$rpm_v2")"
+expect_install_failure "DOWNLOADED"
+rpm -q --qf '%{VERSION}' offline-patch-fixture | grep -qx '1.0'
+echo "PASS: repository tampering is detected and installation is blocked."
+# Restore the repository package and its manifest for the legitimate install.
+cp "$rpm_v2" "$repo_v2/"
+make_state "$CURRENT_STATE" "$repo_v2"
+
+# 2. A valid local repository upgrades the fixture package.
+echo yes | bash "$SCRIPT" install
+[[ "$(rpm -q --qf '%{VERSION}' offline-patch-fixture)" == "2.0" ]]
+[[ "$(cat "$CURRENT_STATE/status")" == "INSTALLED_PENDING_REBOOT" ]]
+[[ -s "$CURRENT_STATE/dnf_transaction_preview.txt" ]]
+[[ -s "$CURRENT_STATE/packages_added.txt" ]]
+echo "PASS: local-only DNF upgrade, preview, inventory and lifecycle transition."
+
+# 3. A second local repository with the installed version must not request reboot.
+repo_noop="$WORK/repo-noop"
+make_repo "$repo_noop" "$rpm_v2"
+CURRENT_STATE="$STATE_ROOT/$RUN_ID-noop"
+make_state "$CURRENT_STATE" "$repo_noop"
+echo yes | bash "$SCRIPT" install
+[[ "$(cat "$CURRENT_STATE/status")" == "NO_CHANGES" ]]
+[[ "$(cat "$CURRENT_STATE/reboot_required")" == "NO" ]]
+[[ ! -s "$CURRENT_STATE/packages_added.txt" ]]
+[[ ! -s "$CURRENT_STATE/packages_removed.txt" ]]
+echo "PASS: no-op DNF transaction records NO_CHANGES and no reboot requirement."
+
+# 4. Simulate a DNF install-stage failure; state must become FAILED.
+rpm_v3="$(build_fixture 3.0)"
+repo_v3="$WORK/repo-v3"
+make_repo "$repo_v3" "$rpm_v3"
+CURRENT_STATE="$STATE_ROOT/$RUN_ID-failed"
+make_state "$CURRENT_STATE" "$repo_v3"
+wrapper="$WORK/mock-bin"
+mkdir -p "$wrapper"
+cat > "$wrapper/dnf" <<'WRAPPER'
+#!/usr/bin/env bash
+for arg in "$@"; do
+  if [[ "$arg" == "-y" ]]; then
+    printf '%s\\n' "Injected DNF transaction failure for integration test" >&2
+    exit 42
+  fi
+done
+exec "$REAL_DNF" "$@"
+WRAPPER
+chmod +x "$wrapper/dnf"
+set +e
+echo yes | REAL_DNF="$REAL_DNF" PATH="$wrapper:$PATH" bash "$SCRIPT" install > "$WORK/failed-transaction.log" 2>&1
+failure_rc=$?
+set -e
+cat "$WORK/failed-transaction.log"
+[[ "$failure_rc" -ne 0 ]]
+[[ "$(cat "$CURRENT_STATE/status")" == "FAILED" ]]
+[[ "$(rpm -q --qf '%{VERSION}' offline-patch-fixture)" == "2.0" ]]
+echo "PASS: failed DNF transaction leaves FAILED state and does not upgrade fixture RPM."
+
+echo "PASS: all Rocky Linux 9 offline-patch integration scenarios."
