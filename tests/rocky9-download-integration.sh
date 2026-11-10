@@ -21,7 +21,10 @@ cleanup() {
     mv "$REPO_BACKUP" /etc/yum.repos.d
   fi
   local path
-  for path in "${CREATED_STATES[@]}"; do rm -rf "$path"; done
+  for path in "${CREATED_STATES[@]}"; do
+    [[ -f "$path/run_id" ]] && rm -f "/root/rpm_inventory_$(cat "$path/run_id").txt"
+    rm -rf "$path"
+  done
   for path in "${CREATED_REPOS[@]}"; do rm -rf "$path"; done
 }
 trap cleanup EXIT
@@ -95,8 +98,8 @@ run_download() {
 }
 
 newest_state() {
-  find "$STATE_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\\n' |
-    sort -nr | head -n1 | cut -d' ' -f2-
+  find "$STATE_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '%f %p\\n' |
+    sort -r | head -n1 | cut -d' ' -f2-
 }
 
 # Baseline fixture v1, with v2 available in the only enabled repository.
