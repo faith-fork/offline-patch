@@ -24,7 +24,7 @@ umask 077
 
 BASE_DIR="/usr/local/src"
 STATE_BASE="/var/lib/offline-patching"
-LOCK_FILE="/var/lock/offline_patch.lock"
+LOCK_FILE="/run/offline_patch.lock"
 
 REPO_ID="offline-local"
 
