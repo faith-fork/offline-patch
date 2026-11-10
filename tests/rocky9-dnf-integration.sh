@@ -35,7 +35,7 @@ Disposable fixture package for the offline-patch CI integration test.
 
 %install
 mkdir -p %{buildroot}/usr/share/offline-patch-fixture
-printf '%s\\n' '%{version}' > %{buildroot}/usr/share/offline-patch-fixture/version.txt
+printf '%s\n' '%{version}' > %{buildroot}/usr/share/offline-patch-fixture/version.txt
 
 %files
 /usr/share/offline-patch-fixture/version.txt
@@ -54,18 +54,18 @@ createrepo_c "$REPO"
 sha256sum "$REPO/SHA256SUMS" | awk '{print $1}' > "$STATE/repository_manifest_hash"
 (
   cd "$REPO"
-  find . -type f ! -name SHA256SUMS -printf '%P\\n' | sort
+  find . -type f ! -name SHA256SUMS -printf '%P\n' | sort
 ) > "$STATE/repository_file_list.txt"
 
 # Match the state format consumed by select_state()/install_updates().
 source /etc/os-release
-printf '%s\\n' DOWNLOADED > "$STATE/status"
-printf '%s\\n' "$REPO" > "$STATE/repo_dir"
-printf '%s\\n' "$ID" > "$STATE/os_id"
-printf '%s\\n' "${VERSION_ID%%.*}" > "$STATE/os_major"
-printf '%s\\n' "$(uname -m)" > "$STATE/arch"
-printf '%s\\n' 1 > "$STATE/rpm_count"
-printf '%s\\n' CREATED > "$STATE/repository_checksum_status"
+printf '%s\n' DOWNLOADED > "$STATE/status"
+printf '%s\n' "$REPO" > "$STATE/repo_dir"
+printf '%s\n' "$ID" > "$STATE/os_id"
+printf '%s\n' "${VERSION_ID%%.*}" > "$STATE/os_major"
+printf '%s\n' "$(uname -m)" > "$STATE/arch"
+printf '%s\n' 1 > "$STATE/rpm_count"
+printf '%s\n' CREATED > "$STATE/repository_checksum_status"
 
 echo "yes" | bash "$SCRIPT" install
 
