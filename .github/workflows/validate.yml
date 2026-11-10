@@ -46,8 +46,8 @@ jobs:
           bash ./offline_patch.sh > smoke-test.out 2>&1
           rc=$?
           set -e
+          cat smoke-test.out
           if [[ "$rc" -ne 1 ]]; then
-            cat smoke-test.out
             echo "Expected help path to exit with status 1; got $rc"
             exit 1
           fi
