@@ -62,7 +62,7 @@ jobs:
     steps:
       - name: Install integration-test tools
         run: |
-          dnf -y install bash dnf rpm-build createrepo_c dnf-plugins-core diffutils findutils grep sed gawk coreutils
+          dnf -y install bash dnf rpm-build createrepo_c dnf-plugins-core diffutils findutils grep sed gawk
       - name: Checkout
         uses: actions/checkout@v4
       - name: Run disposable local-RPM integration test
