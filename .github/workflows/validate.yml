@@ -1,0 +1,41 @@
+name: Offline patch script validation
+
+on:
+  push:
+    branches:
+      - feature/patch-framework-enhancements
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shell-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Validate Bash syntax
+        run: bash -n offline_patch.sh
+      - name: Install ShellCheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+      - name: Run ShellCheck
+        run: shellcheck --severity=warning offline_patch.sh
+
+  rocky-9-parser-check:
+    runs-on: ubuntu-latest
+    container:
+      image: rockylinux:9
+    steps:
+      - name: Install parser tools
+        run: |
+          dnf -y install bash coreutils findutils grep sed gawk
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Validate script under Rocky Linux 9
+        run: bash -n offline_patch.sh
