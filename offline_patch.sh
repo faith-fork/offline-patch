@@ -68,9 +68,9 @@ require_root() {
 
 check_commands() {
     local cmd
-    for cmd in dnf rpm sha256sum awk sed grep sort comm hostname stat \
+    for cmd in dnf rpm sha256sum awk sed grep sort comm diff hostname stat \
                getent timeout flock date find basename readlink cp chmod df \
-               chown cat wc tr sleep xargs paste cmp id tee mkdir; do
+               chown cat wc tr sleep xargs paste cmp id tee mkdir touch rm; do
         command -v "$cmd" >/dev/null 2>&1 ||
             die "Required command not found: $cmd"
     done
@@ -1028,7 +1028,7 @@ Commands:
   report    Generate and display the patch execution report.
 
 Supported:
-  Rocky Linux / RHEL 8 and 9 (DNF4)
+  Rocky Linux, RHEL, AlmaLinux and Oracle Linux 8 and 9 (DNF4)
 
 EOF
             exit 1
