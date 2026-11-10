@@ -38,7 +38,7 @@ Disposable fixture package for the offline-patch CI integration test.
 
 %install
 mkdir -p %{buildroot}/usr/share/offline-patch-fixture
-printf '%s\\n' '%{version}' > %{buildroot}/usr/share/offline-patch-fixture/version.txt
+printf '%s\n' '%{version}' > %{buildroot}/usr/share/offline-patch-fixture/version.txt
 
 %files
 /usr/share/offline-patch-fixture/version.txt
@@ -63,7 +63,7 @@ make_state() {
   (
     cd "$repo"
     find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 -r sha256sum > SHA256SUMS
-    find . -type f ! -name SHA256SUMS -printf '%P\\n' | sort
+    find . -type f ! -name SHA256SUMS -printf '%P\n' | sort
   ) > "$state/repository_file_list.txt"
   sha256sum "$repo/SHA256SUMS" | awk '{print $1}' > "$state/repository_manifest_hash"
   printf '%s\n' DOWNLOADED > "$state/status"
@@ -139,7 +139,7 @@ cat > "$wrapper/dnf" <<'WRAPPER'
 #!/usr/bin/env bash
 for arg in "$@"; do
   if [[ "$arg" == "-y" ]]; then
-    printf '%s\\n' "Injected DNF transaction failure for integration test" >&2
+    printf '%s\n' "Injected DNF transaction failure for integration test" >&2
     exit 42
   fi
 done
