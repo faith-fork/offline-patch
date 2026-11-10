@@ -54,7 +54,7 @@ Disposable fixture package for offline-patch download integration tests.
 
 %install
 mkdir -p %{buildroot}/usr/share/offline-patch-download-fixture
-printf '%s\\n' '%{version}' > %{buildroot}/usr/share/offline-patch-download-fixture/version.txt
+printf '%s\n' '%{version}' > %{buildroot}/usr/share/offline-patch-download-fixture/version.txt
 
 %files
 /usr/share/offline-patch-download-fixture/version.txt
@@ -63,7 +63,7 @@ SPEC
 build_fixture() {
   local version="$1"
   rpmbuild --define "_topdir $BUILD" --define "fixture_version $version" -bb "$BUILD/SPECS/offline-patch-download-fixture.spec" >/dev/null
-  printf '%s\\n' "$BUILD/RPMS/noarch/offline-patch-download-fixture-$version-1.el9.noarch.rpm"
+  printf '%s\n' "$BUILD/RPMS/noarch/offline-patch-download-fixture-$version-1.el9.noarch.rpm"
 }
 
 make_repo() {
@@ -90,7 +90,7 @@ EOF
 run_download() {
   local output="$1"
   set +e
-  printf 'root\\n' | "$@" bash "$SCRIPT" download > "$output" 2>&1
+  printf 'root\n' | "$@" bash "$SCRIPT" download > "$output" 2>&1
   local rc=$?
   set -e
   cat "$output"
@@ -98,7 +98,7 @@ run_download() {
 }
 
 newest_state() {
-  find "$STATE_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '%f %p\\n' |
+  find "$STATE_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '%f %p\n' |
     sort -r | head -n1 | cut -d' ' -f2-
 }
 
@@ -114,7 +114,7 @@ set_enabled_repo "$repo_v2"
 
 # 1. Download-only must capture updates without installing them.
 before_inventory="$WORK/rpm-before.txt"
-rpm -qa --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\\n' | sort > "$before_inventory"
+rpm -qa --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\n' | sort > "$before_inventory"
 run_download "$WORK/download-success.log"
 state_success="$(newest_state)"
 CREATED_STATES+=("$state_success")
@@ -129,7 +129,7 @@ cmp -s "$before_inventory" "$state_success/rpm_inventory.txt"
 (
   cd "$repo_success"
   sha256sum --check SHA256SUMS
-  find . -type f ! -name SHA256SUMS -printf '%P\\n' | sort
+  find . -type f ! -name SHA256SUMS -printf '%P\n' | sort
 ) > "$WORK/repo-verified-files.txt"
 cmp -s "$state_success/repository_file_list.txt" "$WORK/repo-verified-files.txt"
 [[ "$(sha256sum "$repo_success/SHA256SUMS" | awk '{print $1}')" == "$(cat "$state_success/repository_manifest_hash")" ]]
