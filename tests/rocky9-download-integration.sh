@@ -90,10 +90,8 @@ EOF
 run_download() {
   local output="$1"
   shift
-  set +e
-  printf 'root\n' | "$@" bash "$SCRIPT" download > "$output" 2>&1
-  local rc=$?
-  set -e
+  local rc=0
+  printf 'root\\n' | "$@" bash "$SCRIPT" download > "$output" 2>&1 || rc=$?
   cat "$output"
   return "$rc"
 }
