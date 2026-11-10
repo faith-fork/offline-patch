@@ -364,7 +364,7 @@ validate_repository() {
     [[ "$actual_hash" == "$expected_hash" ]] || die "Repository manifest hash mismatch."
     (
         cd "$repo_dir"
-        sha256sum --check SHA256SUMS >/dev/null
+        sha256sum --check SHA256SUMS >/dev/null || exit 1
         find . -type f ! -name SHA256SUMS -printf '%P\n' | sort
     ) > "$current_list" || die "Repository checksum validation failed."
     [[ -s "$expected_list" ]] || die "Stored repository file inventory is missing."
