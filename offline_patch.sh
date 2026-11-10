@@ -30,7 +30,7 @@ REPO_ID="offline-local"
 
 # Set this to a hostname resolvable in your environment.
 # For example: "your-internal-repo.company.example"
-DNS_TEST_NAME="rockylinux.org"
+DNS_TEST_NAME="${DNS_TEST_NAME:-rockylinux.org}"
 
 CONNECTIVITY_ATTEMPTS=3
 CONNECTIVITY_RETRY_DELAY=10
@@ -69,7 +69,7 @@ check_commands() {
     local cmd
     for cmd in dnf rpm sha256sum awk sed grep sort comm hostname stat \
                getent timeout flock date find basename readlink cp chmod \
-               chown cat wc tr sleep xargs paste cmp; do
+               chown cat wc tr sleep xargs paste cmp id tee mkdir; do
         command -v "$cmd" >/dev/null 2>&1 ||
             die "Required command not found: $cmd"
     done
@@ -184,6 +184,11 @@ handle_error() {
         if [[ "$status" == "DOWNLOADING" || "$status" == "INSTALLING" ]]; then
             set_value "$ACTIVE_STATE/status" "FAILED"
             set_value "$ACTIVE_STATE/error" "Command failed at line $line with exit code $rc"
+        elif [[ "$status" == "INSTALLED_PENDING_REBOOT" &&
+                "$(get_value "$ACTIVE_STATE/verification_status")" == "RUNNING" ]]; then
+            set_value "$ACTIVE_STATE/verification_status" "FAILED"
+            set_value "$ACTIVE_STATE/verification_completed" "INTERRUPTED"
+            set_value "$ACTIVE_STATE/verification_error" "Verification interrupted at line $line with exit code $rc"
         fi
     fi
 
@@ -305,24 +310,15 @@ restore_dns() {
         return 1
     }
 
-    # Write through /etc/resolv.conf. If it is a symlink, this normally
-    # writes to its current target rather than replacing the symlink.
-    if ! cat "$backup" > /etc/resolv.conf; then
-        log "Unable to write the DNS backup to /etc/resolv.conf."
-        return 1
+    # Compare only; never overwrite resolver-managed configuration.
+    if cmp -s "$backup" /etc/resolv.conf; then
+        set_value "$state/dns_restored" "UNCHANGED"
+        log "DNS configuration matches the saved baseline; no changes made."
+        return 0
     fi
-
-    chmod "$mode" /etc/resolv.conf || return 1
-    chown "$uid:$gid" /etc/resolv.conf || return 1
-
-    if ! cmp -s "$backup" /etc/resolv.conf; then
-        log "DNS content does not match the saved backup."
-        return 1
-    fi
-
-    set_value "$state/dns_restored" "YES"
-    log "DNS configuration restored and content comparison passed."
-    return 0
+    set_value "$state/dns_restored" "CHANGED"
+    log "DNS configuration differs from the saved baseline; left untouched."
+    return 1
 }
 
 # ----------------------------- Repository integrity -----------------------
@@ -334,14 +330,25 @@ validate_repository() {
     [[ -d "$repo_dir" ]] || die "Local repository directory is missing: $repo_dir"
     [[ -s "$repo_dir/SHA256SUMS" ]] || die "SHA256SUMS manifest is missing."
 
-    log "Validating local repository checksums..."
-
+    local expected_hash actual_hash current_list expected_list
+    expected_list="$state/repository_file_list.txt"
+    current_list="$state/repository_file_list.current"
+    expected_hash="$(get_value "$state/repository_manifest_hash")"
+    [[ -n "$expected_hash" ]] || die "Stored repository manifest hash is missing."
+    actual_hash="$(sha256sum "$repo_dir/SHA256SUMS" | awk '{print $1}')"
+    [[ "$actual_hash" == "$expected_hash" ]] || die "Repository manifest hash mismatch."
     (
         cd "$repo_dir"
         sha256sum --check SHA256SUMS
-    ) || die "Repository checksum validation failed."
-
-    log "Repository checksum validation passed."
+        find . -type f ! -name SHA256SUMS -printf '%P\n' | sort
+    ) > "$current_list" || die "Repository checksum validation failed."
+    [[ -s "$expected_list" ]] || die "Stored repository file inventory is missing."
+    if ! cmp -s "$expected_list" "$current_list"; then
+        diff -u "$expected_list" "$current_list" || true
+        die "Repository file inventory changed."
+    fi
+    rm -f "$current_list"
+    log "Repository manifest, file inventory and checksums passed."
 }
 
 # ----------------------------- RPM inventory ------------------------------
@@ -409,24 +416,26 @@ generate_report() {
         echo "Kernel validation       : $(get_value "$state/kernel_validation")"
         echo "OS validation           : $(get_value "$state/os_validation")"
         echo "DNF transaction check   : $(get_value "$state/dnf_transaction_validation")"
-        echo "DNS restoration         : $(get_value "$state/dns_restored")"
+        echo "DNS comparison          : $(get_value "$state/dns_restored")"
         echo "DNS nameserver          : $(get_value "$state/dns_nameserver")"
         echo "DNS search domain       : $(get_value "$state/dns_search")"
         echo "DNS resolution test     : $(get_value "$state/dns_resolution_status")"
         echo "DNS test hostname       : $(get_value "$state/dns_test_name")"
         echo
         echo "Verification failures:"
-        if [[ -s "$state/verification_failures.txt" ]]; then
-            cat "$state/verification_failures.txt"
+        local latest_failures
+        latest_failures="$(get_value "$state/latest_verification_failures")"
+        if [[ -n "$latest_failures" && -s "$latest_failures" ]]; then
+            cat "$latest_failures"
         else
-            echo "None recorded."
+            echo "None recorded in the latest attempt."
         fi
         echo
         echo "---------------------- Supporting Files ---------------------"
         echo "RPM inventory           : $state/rpm_inventory.txt"
         echo "Package changes         : $state/package_changes.txt"
         echo "DNF transaction details : $state/dnf_history_info.txt"
-        echo "Verification details    : $state/verification_details.txt"
+        echo "Verification details    : $(get_value "$state/latest_verification_details")"
         echo
         echo "=============================================================="
         echo "Generated: $(date '+%F %T %Z')"
@@ -563,6 +572,10 @@ EOF
 
     set_value "$state/repository_manifest_hash" \
         "$(sha256sum "$repo_dir/SHA256SUMS" | awk '{print $1}')"
+    (
+        cd "$repo_dir"
+        find . -type f ! -name SHA256SUMS -printf '%P\n' | sort
+    ) > "$state/repository_file_list.txt"
 
     ACTIVE_STATE=""
     generate_report "$state"
@@ -579,7 +592,7 @@ install_updates() {
     local state repo_dir status
     local kernel_before kernel_after default_kernel expected_kernel
     local boot_id_before transaction_id history_file
-    local before_file after_file
+    local before_file after_file preview_file preview_rc
 
     state="$(select_state "DOWNLOADED" "Select a downloaded patch run")"
     ACTIVE_STATE="$state"
@@ -614,25 +627,30 @@ install_updates() {
 
     before_file="$state/packages_before.txt"
     after_file="$state/packages_after.txt"
+    systemctl --failed --no-legend --no-pager > "$state/failed_services_before.txt" 2>&1 || true
     capture_rpm_inventory "$before_file"
 
-    log "Checking available updates in the local repository..."
+    log "Previewing the DNF transaction from the local repository..."
+    preview_file="$state/dnf_transaction_preview.txt"
+    set +e
     dnf \
         --disablerepo='*' \
         --repofrompath="${REPO_ID},file://${repo_dir}" \
         --enablerepo="$REPO_ID" \
         --setopt="${REPO_ID}.gpgcheck=0" \
         --setopt="${REPO_ID}.repo_gpgcheck=0" \
-        repoquery --upgrades || true
-
+        --setopt=skip_if_unavailable=False \
+        upgrade --assumeno > "$preview_file" 2>&1
+    preview_rc=$?
+    set -e
+    cat "$preview_file"
+    if ((preview_rc != 0)) && ! grep -Eqi 'Operation aborted|Transaction.*aborted|Nothing to do' "$preview_file"; then
+        die "DNF transaction preview failed (exit code $preview_rc)."
+    fi
     echo
-    echo "The script is ready to install updates from:"
-    echo "$repo_dir"
-    echo
-    read -r -p "Proceed with installation? (yes/no): " answer
-
-    [[ "$answer" == "yes" ]] ||
-        die "Installation cancelled by administrator."
+    echo "Review the DNF transaction summary above. Preview: $preview_file"
+    read -r -p "Proceed with this package transaction? Type 'yes': " answer
+    [[ "$answer" == "yes" ]] || die "Installation cancelled by administrator."
 
     log "Installing updates from the local repository only..."
 
@@ -646,7 +664,17 @@ install_updates() {
         upgrade -y
 
     capture_rpm_inventory "$after_file"
-
+    systemctl --failed --no-legend --no-pager > "$state/failed_services_after.txt" 2>&1 || true
+    comm -13 "$state/failed_services_before.txt" "$state/failed_services_after.txt" > "$state/failed_services_new.txt" || true
+    comm -23 "$state/failed_services_before.txt" "$state/failed_services_after.txt" > "$state/failed_services_recovered.txt" || true
+    if command -v needs-restarting >/dev/null 2>&1; then
+        set +e
+        needs-restarting -r > "$state/needs_restarting.txt" 2>&1
+        echo "$?" > "$state/needs_restarting_rc"
+        set -e
+    else
+        set_value "$state/needs_restarting_rc" "NOT_INSTALLED"
+    fi
     comm -13 "$before_file" "$after_file" > "$state/packages_added.txt"
     comm -23 "$before_file" "$after_file" > "$state/packages_removed.txt"
 
@@ -737,12 +765,12 @@ verify_updates() {
 
     ACTIVE_STATE="$state"
     verification_admin="$(get_admin)"
-    failure_file="$state/verification_failures.txt"
-    details_file="$state/verification_details.txt"
-
-    : > "$failure_file"
-    : > "$details_file"
-
+    local attempt_stamp
+    attempt_stamp="$(date '+%Y%m%d_%H%M%S')"
+    failure_file="$state/verification_failures_${attempt_stamp}.txt"
+    details_file="$state/verification_details_${attempt_stamp}.txt"
+    set_value "$state/latest_verification_failures" "$failure_file"
+    set_value "$state/latest_verification_details" "$details_file"
     set_value "$state/verification_admin" "$verification_admin"
     set_value "$state/verification_attempt_time" "$(date '+%F %T %Z')"
     set_value "$state/verification_status" "RUNNING"
