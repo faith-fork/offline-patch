@@ -129,7 +129,7 @@ cmp -s "$before_inventory" "$state_success/rpm_inventory.txt"
 [[ -s "/root/rpm_inventory_$(cat "$state_success/run_id").txt" ]]
 (
   cd "$repo_success"
-  sha256sum --check SHA256SUMS
+  sha256sum --check SHA256SUMS >/dev/null
   find . -type f ! -name SHA256SUMS -printf '%P\n' | sort
 ) > "$WORK/repo-verified-files.txt"
 cmp -s "$state_success/repository_file_list.txt" "$WORK/repo-verified-files.txt"
