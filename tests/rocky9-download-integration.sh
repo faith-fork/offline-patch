@@ -181,4 +181,36 @@ CREATED_STATES+=("$state_failed")
 [[ "$(rpm -q --qf '%{VERSION}' offline-patch-download-fixture)" == "2.0" ]]
 echo "PASS: SIGTERM-interrupted download is marked FAILED, retains diagnostics/inventory, and leaves installed packages unchanged."
 
+# 4. Simulate an uncatchable process death, then recover the stale state on next invocation.
+kill_wrapper="$WORK/kill-bin"
+mkdir -p "$kill_wrapper"
+cat > "$kill_wrapper/dnf" <<'WRAPPER'
+#!/usr/bin/env bash
+for arg in "$@"; do
+  if [[ "$arg" == "--downloadonly" ]]; then
+    echo "Injecting SIGKILL during download for integration test" >&2
+    kill -KILL "$PPID"
+    exit 137
+  fi
+done
+exec "$REAL_DNF" "$@"
+WRAPPER
+chmod +x "$kill_wrapper/dnf"
+
+set +e
+run_download "$WORK/killed-download.log" env REAL_DNF="$REAL_DNF" PATH="$kill_wrapper:$PATH"
+kill_rc=$?
+set -e
+[[ "$kill_rc" -ne 0 ]]
+state_killed="$(newest_state)"
+CREATED_STATES+=("$state_killed")
+[[ "$(cat "$state_killed/status")" == "DOWNLOADING" ]]
+echo "PASS: SIGKILL leaves an incomplete DOWNLOADING state for next-run reconciliation."
+
+# A subsequent normal invocation holds the lock and reconciles the abandoned run.
+run_download "$WORK/recovery-download.log"
+[[ "$(cat "$state_killed/status")" == "FAILED" ]]
+grep -q "interrupted; recovered on" "$state_killed/error"
+echo "PASS: next invocation recovers the abandoned run and records FAILED with an explanatory error."
+
 echo "PASS: all Rocky Linux 9 download-workflow integration scenarios."
