@@ -37,7 +37,7 @@ sed -i \
 
 cat > "$BIN/grubby" <<'EOF'
 #!/usr/bin/env bash
-[[ "${1:-}" == "--default-kernel" ]] && printf '%s\\n' "$TEST_KERNEL_FILE"
+[[ "${1:-}" == "--default-kernel" ]] && printf '%s\n' "$TEST_KERNEL_FILE"
 EOF
 cat > "$BIN/dnf" <<'EOF'
 #!/usr/bin/env bash
