@@ -47,7 +47,7 @@ linux_backup_capture() {
         etc/sudoers etc/sudoers.d etc/sysctl.conf etc/sysctl.d
         etc/security/limits.conf etc/security/limits.d
         etc/systemd/system etc/NetworkManager/system-connections
-        etc/NetworkManager/conf.d etc/ firewalld
+        etc/NetworkManager/conf.d etc/firewalld
     )
     local existing=()
     local p
