@@ -55,7 +55,7 @@ linux_backup_capture() {
         [[ -e "/$p" ]] && existing+=("$p")
     done
 
-    if ((${#existing[@]} == 0)); then
+    if (("${#existing[@]}" == 0)); then
         echo "No configured system paths were found; refusing to create an empty configuration archive." > "$capture/tar-errors.txt"
         log "ERROR: No configuration paths were found for the Linux backup."
         return 1
@@ -79,14 +79,17 @@ linux_backup_capture() {
         return 1
     fi
     rm -f "$archive_listing"
+
+    # Write capture metadata before checksumming so it is covered by the manifest.
+    printf '%s\n' "$backup_id" > "$capture/backup_id"
+    printf '%s\n' "$phase" > "$capture/phase"
+    printf '%s\n' "$(date '+%F %T %Z')" > "$capture/captured_at"
+    printf '%s\n' "PASSED" > "$capture/capture_status"
+
     (
         cd "$capture" || exit 1
         find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 -r sha256sum > SHA256SUMS
     )
-    printf '%s\n' "$backup_id" > "$capture/backup_id"
-    printf '%s\n' "$phase" > "$capture/phase"
-    printf '%s\n' "$(date '+%F %T %Z')" > "$capture/captured_at"
-    return 0
 }
 
 linux_backup() {
@@ -117,7 +120,6 @@ linux_backup() {
             echo "Linux pre-backup capture failed; see tar-errors.txt and run.log." > "$target/pre/capture_error"
             die "Linux pre-backup failed. Incomplete capture retained at $target/pre; latest_pre was not updated."
         fi
-        echo PASSED > "$target/pre/capture_status"
         printf '%s\n' "$backup_id" > "$root/latest_pre"
         log "Linux pre-patch baseline captured: $target/pre"
         return 0
@@ -132,7 +134,6 @@ linux_backup() {
         echo "Linux post-backup capture failed; see tar-errors.txt and run.log." > "$target/post/capture_error"
         die "Linux post-backup failed. Incomplete capture retained at $target/post; latest_pre remains unchanged."
     fi
-    echo PASSED > "$target/post/capture_status"
     ( cd "$target/pre" || exit 1; sha256sum --check SHA256SUMS >/dev/null ) || die "Pre-backup checksum validation failed."
     ( cd "$target/post" || exit 1; sha256sum --check SHA256SUMS >/dev/null ) || die "Post-backup checksum validation failed."
     pre_dir="$target/pre"
