@@ -61,7 +61,7 @@ linux_backup_capture() {
         }
 
     (
-        cd "$capture"
+        cd "$capture" || exit 1
         find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 -r sha256sum > SHA256SUMS
     )
     printf '%s\n' "$backup_id" > "$capture/backup_id"
@@ -103,8 +103,8 @@ linux_backup() {
     target="$root/$backup_id"
     [[ -d "$target/pre" && ! -d "$target/post" ]] || die "Latest pre-backup is missing or already has a post capture."
     linux_backup_capture post "$backup_id" "$target"
-    ( cd "$target/pre" && sha256sum --check SHA256SUMS >/dev/null ) || die "Pre-backup checksum validation failed."
-    ( cd "$target/post" && sha256sum --check SHA256SUMS >/dev/null ) || die "Post-backup checksum validation failed."
+    ( cd "$target/pre" || exit 1; sha256sum --check SHA256SUMS >/dev/null ) || die "Pre-backup checksum validation failed."
+    ( cd "$target/post" || exit 1; sha256sum --check SHA256SUMS >/dev/null ) || die "Post-backup checksum validation failed."
     pre_dir="$target/pre"
     post_dir="$target/post"
     diff -u "$pre_dir/system-inventory.txt" "$post_dir/system-inventory.txt" > "$target/system-inventory.diff" || true
