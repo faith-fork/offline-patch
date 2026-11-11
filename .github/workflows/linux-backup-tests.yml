@@ -1,0 +1,32 @@
+name: Linux backup profile tests
+
+on:
+  push:
+    branches:
+      - feature/patch-framework-enhancements
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-backup-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Validate shell syntax
+        run: |
+          bash -n offline_patch.sh
+          bash -n lib/linux_backup.sh
+          bash -n tests/test_linux_backup.sh
+      - name: Install ShellCheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+      - name: ShellCheck
+        run: |
+          shellcheck -S warning offline_patch.sh lib/linux_backup.sh tests/test_linux_backup.sh
+      - name: Run Linux backup lifecycle tests
+        run: bash tests/test_linux_backup.sh
