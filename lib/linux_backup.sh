@@ -7,7 +7,7 @@ linux_backup_root() {
 }
 
 linux_backup_capture() {
-    local phase="$1" backup_id="$2" root="$3" target="$4"
+    local phase="$1" backup_id="$2" target="$3"
     local capture="$target/$phase"
     mkdir -p "$capture"
     chmod 700 "$target" "$capture"
@@ -85,13 +85,14 @@ linux_backup() {
     chmod 700 "$root"
 
     if [[ "$phase" == "pre" ]]; then
-        backup_id="$(date +%Y%m%d_%H%M%S)_$$"
+        [[ ! -s "$root/latest_pre" ]] || die "An unmatched pre-backup already exists. Complete its post phase first."
+        backup_id="$(date +%Y%m%d_%H%M%S)_$"
         target="$root/$backup_id"
         mkdir -p "$target"
         printf '%s\n' "$backup_id" > "$target/backup_id"
         printf '%s\n' "$HOST" > "$target/hostname"
         printf '%s\n' "$(date '+%F %T %Z')" > "$target/created_at"
-        linux_backup_capture pre "$backup_id" "$root" "$target"
+        linux_backup_capture pre "$backup_id" "$target"
         printf '%s\n' "$backup_id" > "$root/latest_pre"
         log "Linux pre-patch baseline captured: $target/pre"
         return 0
@@ -101,7 +102,9 @@ linux_backup() {
     [[ -n "$backup_id" ]] || die "No unmatched Linux pre-backup found. Run backup linux --phase pre first."
     target="$root/$backup_id"
     [[ -d "$target/pre" && ! -d "$target/post" ]] || die "Latest pre-backup is missing or already has a post capture."
-    linux_backup_capture post "$backup_id" "$root" "$target"
+    linux_backup_capture post "$backup_id" "$target"
+    ( cd "$target/pre" && sha256sum --check SHA256SUMS >/dev/null ) || die "Pre-backup checksum validation failed."
+    ( cd "$target/post" && sha256sum --check SHA256SUMS >/dev/null ) || die "Post-backup checksum validation failed."
     pre_dir="$target/pre"
     post_dir="$target/post"
     diff -u "$pre_dir/system-inventory.txt" "$post_dir/system-inventory.txt" > "$target/system-inventory.diff" || true
