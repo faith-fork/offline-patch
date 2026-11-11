@@ -26,8 +26,9 @@ trap cleanup EXIT
 source /etc/os-release
 [[ "$ID" == rocky && "${VERSION_ID%%.*}" == 9 ]] || { echo "This test requires Rocky Linux 9."; exit 1; }
 
-mkdir -p "$BIN" "$STATE" "$BASE_DIR" /boot
+mkdir -p "$BIN" "$STATE" "$BASE_DIR" "$WORK/lib" /boot
 cp "$SOURCE_SCRIPT" "$SCRIPT"
+cp "$ROOT/lib/linux_backup.sh" "$WORK/lib/linux_backup.sh"
 sed -i \
   -e "s|^BASE_DIR=.*|BASE_DIR=\"$BASE_DIR\"|" \
   -e "s|^STATE_BASE=.*|STATE_BASE=\"$STATE_BASE\"|" \
