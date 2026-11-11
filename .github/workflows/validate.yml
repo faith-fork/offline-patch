@@ -82,3 +82,17 @@ jobs:
       - name: Run download workflow integration tests
         shell: bash
         run: bash tests/rocky9-download-integration.sh
+
+  rocky-9-verify-integration:
+    runs-on: ubuntu-latest
+    container:
+      image: rockylinux:9
+    steps:
+      - name: Install verification-test tools
+        run: |
+          dnf -y install bash diffutils findutils grep sed gawk
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Run post-reboot verification integration tests
+        shell: bash
+        run: bash tests/rocky9-verify-integration.sh
