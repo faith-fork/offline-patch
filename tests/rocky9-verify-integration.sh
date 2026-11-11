@@ -35,9 +35,9 @@ sed -i \
   -e "s|cat /proc/sys/kernel/random/boot_id|cat \"$BOOT_ID_FILE\"|" \
   "$SCRIPT"
 
-cat > "$BIN/grubby" <<EOF
+cat > "$BIN/grubby" <<'EOF'
 #!/usr/bin/env bash
-[[ "${1:-}" == "--default-kernel" ]] && printf '%s\n' "$KERNEL_FILE"
+[[ "${1:-}" == "--default-kernel" ]] && printf '%s\\n' "$TEST_KERNEL_FILE"
 EOF
 cat > "$BIN/dnf" <<'EOF'
 #!/usr/bin/env bash
@@ -71,7 +71,7 @@ stat -c '%u' /etc/resolv.conf > "$STATE/dns_original_uid"
 stat -c '%g' /etc/resolv.conf > "$STATE/dns_original_gid"
 
 # First attempt: no reboot occurred. It must fail safely and remain retryable.
-PATH="$BIN:$PATH" bash "$SCRIPT" verify
+TEST_KERNEL_FILE="$KERNEL_FILE" PATH="$BIN:$PATH" bash "$SCRIPT" verify
 [[ "$(cat "$STATE/status")" == "INSTALLED_PENDING_REBOOT" ]]
 [[ "$(cat "$STATE/verification_status")" == "FAILED" ]]
 [[ "$(cat "$STATE/reboot_status")" == "FAILED" ]]
