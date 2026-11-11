@@ -51,6 +51,9 @@ OS_VERSION_ID=""
 OS_MAJOR=""
 ARCH="$(uname -m)"
 
+# Optional modular capabilities.
+source "$(dirname "$0")/lib/linux_backup.sh"
+
 # ----------------------------- Common helpers -----------------------------
 
 log() {
@@ -70,7 +73,7 @@ check_commands() {
     local cmd
     for cmd in dnf rpm sha256sum awk sed grep sort comm diff hostname stat \
                getent timeout flock date find basename readlink cp chmod df \
-               chown cat wc tr sleep xargs paste cmp id tee mkdir touch rm; do
+               chown cat wc tr sleep xargs paste cmp id tee mkdir touch rm tar; do
         command -v "$cmd" >/dev/null 2>&1 ||
             die "Required command not found: $cmd"
     done
@@ -1058,6 +1061,10 @@ main() {
         report)
             report_updates
             ;;
+        backup)
+            shift
+            linux_backup "$@"
+            ;;
         *)
             cat <<EOF
 Offline Patch Management Script v$SCRIPT_VERSION
@@ -1068,6 +1075,8 @@ Usage:
   sudo reboot
   sudo $0 verify
   sudo $0 report
+  sudo $0 backup linux --phase pre
+  sudo $0 backup linux --phase post
 
 Commands:
   download  Validate enabled repositories and download updates locally.
