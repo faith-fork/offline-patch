@@ -158,8 +158,10 @@ cat > "$wrapper/dnf" <<'WRAPPER'
 #!/usr/bin/env bash
 for arg in "$@"; do
   if [[ "$arg" == "--downloadonly" ]]; then
-    echo "Injected interrupted download for integration test" >&2
-    exit 42
+    echo "Injecting SIGTERM during download for integration test" >&2
+    kill -TERM "$PPID"
+    sleep 1
+    exit 143
   fi
 done
 exec "$REAL_DNF" "$@"
@@ -177,6 +179,6 @@ CREATED_STATES+=("$state_failed")
 [[ -s "$state_failed/rpm_inventory.txt" ]]
 [[ -s "$state_failed/run.log" ]]
 [[ "$(rpm -q --qf '%{VERSION}' offline-patch-download-fixture)" == "2.0" ]]
-echo "PASS: interrupted download is marked FAILED, retains diagnostics/inventory, and leaves installed packages unchanged."
+echo "PASS: SIGTERM-interrupted download is marked FAILED, retains diagnostics/inventory, and leaves installed packages unchanged."
 
 echo "PASS: all Rocky Linux 9 download-workflow integration scenarios."
