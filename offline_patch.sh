@@ -996,6 +996,9 @@ main() {
     CURRENT_COMMAND="${1:-}"
 
     trap 'handle_error $? $LINENO' ERR
+    trap 'handle_error 130 "$LINENO"' INT
+    trap 'handle_error 143 "$LINENO"' TERM
+    trap 'handle_error 129 "$LINENO"' HUP
     trap cleanup EXIT
 
     case "$CURRENT_COMMAND" in
