@@ -50,16 +50,35 @@ linux_backup_capture() {
         etc/NetworkManager/conf.d etc/firewalld
     )
     local existing=()
-    local p
+    local p archive_listing
     for p in "${paths[@]}"; do
         [[ -e "/$p" ]] && existing+=("$p")
     done
-    tar --create --gzip --file "$capture/etc-config.tar.gz" \
-        --absolute-names --numeric-owner --acls --xattrs \
-        --warning=no-file-changed "${existing[@]}" 2>"$capture/tar-errors.txt" || {
-            log "WARNING: Some configuration paths could not be archived; inspect $capture/tar-errors.txt"
-        }
 
+    if (("${#existing[@]}" == 0)); then
+        echo "No configured system paths were found; refusing to create an empty configuration archive." > "$capture/tar-errors.txt"
+        log "ERROR: No configuration paths were found for the Linux backup."
+        return 1
+    fi
+
+    # Archive from / so paths resolve regardless of the caller working directory.
+    if ! tar --create --gzip --file "$capture/etc-config.tar.gz" \
+        --directory / --numeric-owner --acls --xattrs \
+        --warning=no-file-changed "${existing[@]}" 2>"$capture/tar-errors.txt"; then
+        log "ERROR: Configuration archive creation failed; inspect $capture/tar-errors.txt"
+        return 1
+    fi
+
+    # Validate archive readability and ensure it contains at least one entry.
+    archive_listing="$capture/.etc-config-archive-list"
+    if ! tar --list --gzip --file "$capture/etc-config.tar.gz" > "$archive_listing" 2>>"$capture/tar-errors.txt" ||
+       [[ ! -s "$archive_listing" ]]; then
+        echo "Configuration archive validation failed or archive contains no entries." >> "$capture/tar-errors.txt"
+        rm -f "$archive_listing"
+        log "ERROR: Configuration archive validation failed; inspect $capture/tar-errors.txt"
+        return 1
+    fi
+    rm -f "$archive_listing"
     (
         cd "$capture" || exit 1
         find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 -r sha256sum > SHA256SUMS
@@ -67,6 +86,7 @@ linux_backup_capture() {
     printf '%s\n' "$backup_id" > "$capture/backup_id"
     printf '%s\n' "$phase" > "$capture/phase"
     printf '%s\n' "$(date '+%F %T %Z')" > "$capture/captured_at"
+    return 0
 }
 
 linux_backup() {
@@ -86,13 +106,18 @@ linux_backup() {
 
     if [[ "$phase" == "pre" ]]; then
         [[ ! -s "$root/latest_pre" ]] || die "An unmatched pre-backup already exists. Complete its post phase first."
-        backup_id="$(date +%Y%m%d_%H%M%S)_$"
+        backup_id="$(date +%Y%m%d_%H%M%S_%N)_$"
         target="$root/$backup_id"
         mkdir -p "$target"
         printf '%s\n' "$backup_id" > "$target/backup_id"
         printf '%s\n' "$HOST" > "$target/hostname"
         printf '%s\n' "$(date '+%F %T %Z')" > "$target/created_at"
-        linux_backup_capture pre "$backup_id" "$target"
+        if ! linux_backup_capture pre "$backup_id" "$target"; then
+            echo FAILED > "$target/pre/capture_status"
+            echo "Linux pre-backup capture failed; see tar-errors.txt and run.log." > "$target/pre/capture_error"
+            die "Linux pre-backup failed. Incomplete capture retained at $target/pre; latest_pre was not updated."
+        fi
+        echo PASSED > "$target/pre/capture_status"
         printf '%s\n' "$backup_id" > "$root/latest_pre"
         log "Linux pre-patch baseline captured: $target/pre"
         return 0
@@ -102,7 +127,12 @@ linux_backup() {
     [[ -n "$backup_id" ]] || die "No unmatched Linux pre-backup found. Run backup linux --phase pre first."
     target="$root/$backup_id"
     [[ -d "$target/pre" && ! -d "$target/post" ]] || die "Latest pre-backup is missing or already has a post capture."
-    linux_backup_capture post "$backup_id" "$target"
+    if ! linux_backup_capture post "$backup_id" "$target"; then
+        echo FAILED > "$target/post/capture_status"
+        echo "Linux post-backup capture failed; see tar-errors.txt and run.log." > "$target/post/capture_error"
+        die "Linux post-backup failed. Incomplete capture retained at $target/post; latest_pre remains unchanged."
+    fi
+    echo PASSED > "$target/post/capture_status"
     ( cd "$target/pre" || exit 1; sha256sum --check SHA256SUMS >/dev/null ) || die "Pre-backup checksum validation failed."
     ( cd "$target/post" || exit 1; sha256sum --check SHA256SUMS >/dev/null ) || die "Post-backup checksum validation failed."
     pre_dir="$target/pre"
