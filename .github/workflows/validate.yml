@@ -1,4 +1,4 @@
-name: Offline patch script validation
+name: Offline patch script validation # Rocky Linux 9 lifecycle integration
 
 on:
   push:
