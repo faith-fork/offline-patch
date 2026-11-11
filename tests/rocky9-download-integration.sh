@@ -91,7 +91,7 @@ run_download() {
   local output="$1"
   shift
   local rc=0
-  printf 'root\\n' | "$@" bash "$SCRIPT" download > "$output" 2>&1 || rc=$?
+  "$@" bash "$SCRIPT" download <<<"root" > "$output" 2>&1 || rc=$?
   cat "$output"
   return "$rc"
 }
