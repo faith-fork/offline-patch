@@ -451,6 +451,7 @@ generate_report() {
         echo "RPM count               : $(get_value "$state/rpm_count")"
         echo "Repository checksum     : $(get_value "$state/repository_checksum_status")"
         echo "Repository manifest hash: $(get_value "$state/repository_manifest_hash")"
+        echo "Enabled repositories    : $state/enabled_repositories.txt"
         echo "Run log                 : $state/run.log"
         echo
         echo "---------------------- Installation -------------------------"
@@ -575,6 +576,9 @@ download_updates() {
 
     check_repository_connectivity ||
         die "Repository connectivity validation failed after prerequisite installation."
+
+    log "Recording enabled DNF repositories included in the patch scope..."
+    dnf repolist --enabled | tee "$state/enabled_repositories.txt"
 
     backup_dns "$state"
 
