@@ -37,12 +37,12 @@ sed -i \
 
 cat > "$BIN/grubby" <<EOF
 #!/usr/bin/env bash
-[[ "${1:-}" == "--default-kernel" ]] && printf '%s\\n' "$KERNEL_FILE"
+[[ "${1:-}" == "--default-kernel" ]] && printf '%s\n' "$KERNEL_FILE"
 EOF
 cat > "$BIN/dnf" <<'EOF'
 #!/usr/bin/env bash
 if [[ "${1:-}" == "history" && "${2:-}" == "info" && "${3:-}" == "77" ]]; then
-  printf 'Transaction ID : 77\\n'
+  printf 'Transaction ID : 77\n'
   exit 0
 fi
 echo "Unexpected DNF invocation: $*" >&2
@@ -52,19 +52,19 @@ chmod +x "$BIN/grubby" "$BIN/dnf"
 touch "$KERNEL_FILE"
 
 running_kernel="$(uname -r)"
-printf '%s\\n' "$running_kernel" > "$WORK/kernel_expected"
-printf 'boot-before-test\\n' > "$BOOT_ID_FILE"
+printf '%s\n' "$running_kernel" > "$WORK/kernel_expected"
+printf 'boot-before-test\n' > "$BOOT_ID_FILE"
 
 cat > "$STATE/status" <<'EOF'
 INSTALLED_PENDING_REBOOT
 EOF
-printf 'verify-fixture\\n' > "$STATE/run_id"
-printf '%s\\n' "$ID" > "$STATE/os_id"
-printf '%s\\n' "${VERSION_ID%%.*}" > "$STATE/os_major"
-printf 'boot-before-test\\n' > "$STATE/boot_id_before_install"
-printf '%s\\n' "$running_kernel" > "$STATE/kernel_expected"
-printf '77\\n' > "$STATE/dnf_transaction_id"
-printf 'localhost\\n' > "$STATE/dns_test_name"
+printf 'verify-fixture\n' > "$STATE/run_id"
+printf '%s\n' "$ID" > "$STATE/os_id"
+printf '%s\n' "${VERSION_ID%%.*}" > "$STATE/os_major"
+printf 'boot-before-test\n' > "$STATE/boot_id_before_install"
+printf '%s\n' "$running_kernel" > "$STATE/kernel_expected"
+printf '77\n' > "$STATE/dnf_transaction_id"
+printf 'localhost\n' > "$STATE/dns_test_name"
 cp /etc/resolv.conf "$STATE/resolv.conf.backup"
 stat -c '%a' /etc/resolv.conf > "$STATE/dns_original_mode"
 stat -c '%u' /etc/resolv.conf > "$STATE/dns_original_uid"
@@ -80,7 +80,7 @@ echo "PASS: verification detects missing reboot and preserves retryable lifecycl
 
 # Second attempt: simulate a new boot ID; all other checks remain controlled.
 sleep 1
-printf 'boot-after-test\\n' > "$BOOT_ID_FILE"
+printf 'boot-after-test\n' > "$BOOT_ID_FILE"
 PATH="$BIN:$PATH" bash "$SCRIPT" verify
 [[ "$(cat "$STATE/status")" == "VERIFIED" ]]
 [[ "$(cat "$STATE/verification_status")" == "PASSED" ]]
