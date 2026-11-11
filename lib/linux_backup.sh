@@ -55,7 +55,7 @@ linux_backup_capture() {
         [[ -e "/$p" ]] && existing+=("$p")
     done
 
-    if (("${#existing[@]}" == 0)); then
+    if ((${#existing[@]} == 0)); then
         echo "No configured system paths were found; refusing to create an empty configuration archive." > "$capture/tar-errors.txt"
         log "ERROR: No configuration paths were found for the Linux backup."
         return 1
@@ -106,7 +106,7 @@ linux_backup() {
 
     if [[ "$phase" == "pre" ]]; then
         [[ ! -s "$root/latest_pre" ]] || die "An unmatched pre-backup already exists. Complete its post phase first."
-        backup_id="$(date +%Y%m%d_%H%M%S_%N)_$"
+        backup_id="$(date +%Y%m%d_%H%M%S_%N)"
         target="$root/$backup_id"
         mkdir -p "$target"
         printf '%s\n' "$backup_id" > "$target/backup_id"
