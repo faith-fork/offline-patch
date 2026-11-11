@@ -156,6 +156,42 @@ set_value() {
     printf '%s\n' "$value" > "$file"
 }
 
+reconcile_interrupted_runs() {
+    local dir status verification_status recovered_at
+    local recovered=0
+
+    [[ -d "$STATE_BASE/$HOST" ]] || return 0
+    recovered_at="$(date '+%F %T %Z')"
+
+    while IFS= read -r dir; do
+        [[ -n "$dir" ]] || continue
+        status="$(get_value "$dir/status")"
+
+        case "$status" in
+            DOWNLOADING|INSTALLING)
+                set_value "$dir/status" "FAILED"
+                set_value "$dir/error" "Previous $status run was interrupted; recovered on $recovered_at."
+                log "Recovered interrupted $status run: $(basename "$dir")"
+                ((recovered+=1))
+                ;;
+            INSTALLED_PENDING_REBOOT)
+                verification_status="$(get_value "$dir/verification_status")"
+                if [[ "$verification_status" == "RUNNING" ]]; then
+                    set_value "$dir/verification_status" "FAILED"
+                    set_value "$dir/verification_completed" "INTERRUPTED"
+                    set_value "$dir/verification_error" "Verification process was interrupted; recovered on $recovered_at."
+                    log "Recovered interrupted verification run: $(basename "$dir")"
+                    ((recovered+=1))
+                fi
+                ;;
+        esac
+    done < <(get_state_dirs "")
+
+    if ((recovered > 0)); then
+        log "Recovered $recovered interrupted patch/verification run(s)."
+    fi
+}
+
 select_state() {
     local filter="$1"
     local prompt="${2:-Select a patch run}"
@@ -1000,6 +1036,10 @@ main() {
     trap 'handle_error 143 "$LINENO"' TERM
     trap 'handle_error 129 "$LINENO"' HUP
     trap cleanup EXIT
+
+    # The lock is held, so any in-progress state belongs to a process that
+    # no longer owns the lock and can safely be reconciled as interrupted.
+    reconcile_interrupted_runs
 
     case "$CURRENT_COMMAND" in
         download)
