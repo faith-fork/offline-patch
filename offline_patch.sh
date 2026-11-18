@@ -2,7 +2,7 @@
 #
 # offline_patch.sh
 #
-# Individual-server offline patch management for Rocky Linux / RHEL 8 and 9.
+# Individual-server offline patch management for supported Enterprise Linux hosts.
 # Uses DNF4. The local repository remains on the same server.
 #
 # Usage:
@@ -31,6 +31,10 @@ REPO_ID="offline-local"
 # Set this to a hostname resolvable in your environment.
 # For example: "your-internal-repo.company.example"
 DNS_TEST_NAME="rockylinux.org"
+
+# Rocky Linux 10 support remains disabled until its full workflow has been
+# validated on a Rocky 10 test host. Set to "yes" only after that validation.
+ENABLE_ROCKY_10="no"
 
 # Optional MinIO alias configured for the root account with `mc alias set`.
 # When set, the script exports server settings, IAM, and bucket metadata.
@@ -192,8 +196,40 @@ get_os_info() {
             ;;
     esac
 
-    [[ "$OS_MAJOR" == "8" || "$OS_MAJOR" == "9" ]] ||
-        die "Unsupported OS major version: $OS_MAJOR. This script targets version 8 or 9."
+    case "$OS_MAJOR" in
+        8|9)
+            ;;
+        10)
+            [[ "$OS_ID" == "rocky" ]] ||
+                die "Major version 10 is currently supported only for Rocky Linux."
+            [[ "$ENABLE_ROCKY_10" == "yes" ]] ||
+                die "Rocky Linux 10 support is currently gated off. Validate the full workflow on a Rocky 10 test host, then set ENABLE_ROCKY_10=\"yes\" near the top of this script."
+            ;;
+        *)
+            die "Unsupported OS major version: $OS_MAJOR. This script targets versions 8 and 9, with gated Rocky Linux 10 support."
+            ;;
+    esac
+}
+
+validate_rocky10_environment() {
+    local dnf_version cpu_flags flag
+    local -a required_cpu_flags=(avx avx2 bmi1 bmi2 f16c fma abm movbe xsave \
+        sse3 sse4_1 sse4_2 ssse3 popcnt cx16 lahf_lm)
+
+    [[ "$OS_ID" == "rocky" && "$OS_MAJOR" == "10" ]] || return 0
+
+    dnf_version="$(dnf --version 2>&1 | sed -n '1p')"
+    [[ "$dnf_version" =~ ^4([.]|$) ]] ||
+        die "Rocky Linux 10 support requires DNF4; detected: ${dnf_version:-unknown}. DNF5 has not been validated by this script."
+
+    if [[ "$ARCH" == "x86_64" ]]; then
+        cpu_flags="$(awk -F: '/^flags[[:space:]]*:/{gsub(/^[[:space:]]+/, "", $2); print $2; exit}' /proc/cpuinfo)"
+        [[ -n "$cpu_flags" ]] || die "Unable to read CPU flags to verify Rocky Linux 10's x86-64-v3 requirement."
+        for flag in "${required_cpu_flags[@]}"; do
+            [[ " $cpu_flags " == *" $flag "* ]] ||
+                die "CPU does not expose required x86-64-v3 flag '$flag'; Rocky Linux 10 patching is stopped."
+        done
+    fi
 }
 
 get_admin() {
@@ -1383,6 +1419,7 @@ main() {
     require_root
     check_commands
     get_os_info
+    validate_rocky10_environment
     acquire_lock
 
     CURRENT_COMMAND="${1:-}"
@@ -1431,7 +1468,8 @@ Commands:
   recover   Validate and resume an interrupted local package installation.
 
 Supported:
-  Rocky Linux / RHEL 8 and 9 (DNF4)
+  Rocky Linux / RHEL / AlmaLinux / Oracle Linux 8 and 9 (DNF4)
+  Rocky Linux 10 (gated; DNF4 and x86-64-v3 checks required)
 
 EOF
             exit 1
