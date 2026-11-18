@@ -947,6 +947,17 @@ report_updates() {
 
 inspect_updates() {
     local state
+    local -a available_states=()
+
+    while IFS= read -r state; do
+        [[ -n "$state" ]] && available_states+=("$state")
+    done < <(get_state_dirs "")
+
+    if ((${#available_states[@]} == 0)); then
+        log "No patch runs found for host '$HOST' in $STATE_BASE/$HOST. Run 'download' to create a patch run."
+        return 0
+    fi
+
     state="$(select_state "" "Select a patch run to inspect")"
     echo "Run directory : $state"
     echo "Status        : $(get_value "$state/status")"
