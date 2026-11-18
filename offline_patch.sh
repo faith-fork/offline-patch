@@ -244,6 +244,7 @@ backup_configs() {
 
 collect_linux_snapshot() {
     local backup_dir="$1" phase="$2" output="$1/$2"
+    local lvm_command
     mkdir -p "$output"
     chmod 700 "$output"
     {
@@ -255,7 +256,20 @@ collect_linux_snapshot() {
     } > "$output/host.txt"
     df -hT > "$output/df-hT.txt" 2>&1 || true
     lsblk -a -o NAME,KNAME,TYPE,SIZE,FSTYPE,UUID,MOUNTPOINTS > "$output/lsblk.txt" 2>&1 || lsblk -a > "$output/lsblk.txt" 2>&1 || true
+    if [[ -r /etc/fstab ]]; then
+        cat /etc/fstab > "$output/fstab.txt"
+    else
+        echo "/etc/fstab is unavailable" > "$output/fstab.txt"
+    fi
+    findmnt --fstab --evaluate > "$output/findmnt-fstab.txt" 2>&1 || true
     findmnt --real > "$output/findmnt.txt" 2>&1 || mount > "$output/mounts.txt" 2>&1 || true
+    for lvm_command in pvs vgs lvs; do
+        if command -v "$lvm_command" >/dev/null 2>&1; then
+            "$lvm_command" > "$output/$lvm_command.txt" 2>&1 || true
+        else
+            echo "$lvm_command is not installed" > "$output/$lvm_command.txt"
+        fi
+    done
     ip -brief address > "$output/ip-address.txt" 2>&1 || true
     ip route show table all > "$output/ip-routes.txt" 2>&1 || true
     ip rule show > "$output/ip-rules.txt" 2>&1 || true
@@ -596,6 +610,22 @@ html_escape_file() {
         "$1"
 }
 
+render_diff_html() {
+    local file="$1" line escaped
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        escaped="$(html_escape "$line")"
+        case "$line" in
+            +++*|---*|diff\ -ru*|Index:*)
+                printf '<span class="diff-meta">%s</span>\n' "$escaped"
+                ;;
+            +*) printf '<span class="diff-add">%s</span>\n' "$escaped" ;;
+            -*) printf '<span class="diff-del">%s</span>\n' "$escaped" ;;
+            @@*) printf '<span class="diff-hunk">%s</span>\n' "$escaped" ;;
+            *) printf '%s\n' "$escaped" ;;
+        esac
+    done < "$file"
+}
+
 generate_html_report() {
     local state="$1" report="$1/patch_execution_report.html"
     local baseline_dir before_file after_file name value
@@ -613,6 +643,7 @@ generate_html_report() {
 body{font:15px/1.5 system-ui,sans-serif;max-width:1200px;margin:2rem auto;padding:0 1rem;color:#1f2937}
 h1,h2{color:#111827}table{border-collapse:collapse;width:100%;margin:1rem 0 2rem}th,td{border:1px solid #d1d5db;padding:.5rem;text-align:left;vertical-align:top}th{background:#f3f4f6}
 pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f8fafc;padding:1rem;border:1px solid #e5e7eb;border-radius:.35rem;margin:.5rem 0}
+.diff-add{display:block;background:#dcfce7;color:#166534}.diff-del{display:block;background:#fee2e2;color:#991b1b}.diff-hunk,.diff-meta{display:block;color:#475569;font-weight:600}
 .columns{display:grid;grid-template-columns:1fr 1fr;gap:1rem}details{margin:1rem 0}summary{cursor:pointer;font-weight:600}.note{color:#4b5563}
 @media(max-width:760px){.columns{grid-template-columns:1fr}}
 </style>
@@ -665,9 +696,10 @@ HTML
             printf '<p>Linux pre-patch snapshot is not available.</p>\n'
         fi
         printf '<h2>Comparison diff</h2>\n'
+        printf '<p class="note"><span class="diff-add">Green: added or changed-to lines</span> <span class="diff-del">Red: removed or changed-from lines</span></p>\n'
         if [[ -s "$state/linux_baseline_diff.txt" ]]; then
             printf '<pre>'
-            html_escape_file "$state/linux_baseline_diff.txt"
+            render_diff_html "$state/linux_baseline_diff.txt"
             printf '</pre>\n'
         else
             printf '<p>Post-reboot comparison is not available yet.</p>\n'
