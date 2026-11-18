@@ -14,7 +14,7 @@
 
 Rocky Linux 10 support is present but disabled by default until the complete download, local install, reboot verification, reporting, and recovery workflow has been validated on a Rocky Linux 10 test host. To enable it after validation, set `ENABLE_ROCKY_10="yes"` near the top of `offline_patch.sh`.
 
-The gated path accepts Rocky Linux 10 only, requires DNF4, and rejects DNF5 because this script's DNF5 behavior has not been validated. On `x86_64`, it also checks for the CPU flags required by Rocky Linux 10's x86-64-v3 baseline. This does not add support for RHEL, AlmaLinux, or Oracle Linux 10. Rocky Linux does not support an in-place major upgrade from 8 or 9 to 10; use a fresh OS installation for that transition. See the [Rocky Linux 10 release notes](https://docs.rockylinux.org/latest/releases/release_notes/10_0/) and [Rocky release lifecycle](https://docs.rockylinux.org/releases/).
+The gated path accepts Rocky Linux 10 only, requires DNF4, and rejects DNF5 because this script's DNF5 behavior has not been validated. On `x86_64`, it checks the dynamic loader's reported x86-64-v3 capability, which accounts for the CPU feature names exposed by the host. This does not add support for RHEL, AlmaLinux, or Oracle Linux 10. Rocky Linux does not support an in-place major upgrade from 8 or 9 to 10; use a fresh OS installation for that transition. See the [Rocky Linux 10 release notes](https://docs.rockylinux.org/latest/releases/release_notes/10_0/) and [Rocky release lifecycle](https://docs.rockylinux.org/releases/).
 
 The default RPM repository path is `/usr/local/src`. Run state and reports are stored under `/var/lib/offline-patching/<hostname>`. A lock file prevents two copies of this script from running at the same time.
 
