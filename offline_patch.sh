@@ -454,6 +454,105 @@ capture_rpm_inventory() {
         sort > "$output_file"
 }
 
+html_escape() {
+    printf '%s' "$1" | sed \
+        -e 's/\&/\&amp;/g' \
+        -e 's/</\&lt;/g' \
+        -e 's/>/\&gt;/g' \
+        -e 's/"/\&quot;/g' \
+        -e "s/'/\&#39;/g"
+}
+
+html_escape_file() {
+    sed \
+        -e 's/\&/\&amp;/g' \
+        -e 's/</\&lt;/g' \
+        -e 's/>/\&gt;/g' \
+        -e 's/"/\&quot;/g' \
+        "$1"
+}
+
+generate_html_report() {
+    local state="$1" report="$1/patch_execution_report.html"
+    local baseline_dir before_file after_file name value
+
+    baseline_dir="$(get_value "$state/config_backup_dir")"
+    {
+        cat <<'HTML'
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Linux Patch Report</title>
+<style>
+body{font:15px/1.5 system-ui,sans-serif;max-width:1200px;margin:2rem auto;padding:0 1rem;color:#1f2937}
+h1,h2{color:#111827}table{border-collapse:collapse;width:100%;margin:1rem 0 2rem}th,td{border:1px solid #d1d5db;padding:.5rem;text-align:left;vertical-align:top}th{background:#f3f4f6}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f8fafc;padding:1rem;border:1px solid #e5e7eb;border-radius:.35rem;margin:.5rem 0}
+.columns{display:grid;grid-template-columns:1fr 1fr;gap:1rem}details{margin:1rem 0}summary{cursor:pointer;font-weight:600}.note{color:#4b5563}
+@media(max-width:760px){.columns{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<h1>Linux Patch Report</h1>
+HTML
+        printf '<table><tbody>\n'
+        for name in Hostname Run_ID Lifecycle_status Verification_status Install_started Install_completed Verification_completed; do
+            case "$name" in
+                Hostname) value="$HOST" ;;
+                Run_ID) value="$(basename "$state")" ;;
+                Lifecycle_status) value="$(get_value "$state/status")" ;;
+                Verification_status) value="$(get_value "$state/verification_status")" ;;
+                Install_started) value="$(get_value "$state/install_started")" ;;
+                Install_completed) value="$(get_value "$state/install_completed")" ;;
+                Verification_completed) value="$(get_value "$state/verification_completed")" ;;
+            esac
+            printf '<tr><th>%s</th><td>%s</td></tr>\n' \
+                "$(html_escape "${name//_/ }")" "$(html_escape "$value")"
+        done
+        printf '</tbody></table>\n'
+        printf '<h2>Pre and post reboot snapshots</h2>\n'
+        printf '<p class="note">Differences can reflect expected package updates and dynamic system state. Review them; they are not automatic pass/fail checks.</p>\n'
+        if [[ -d "$baseline_dir/before" ]]; then
+            for before_file in "$baseline_dir"/before/*; do
+                [[ -f "$before_file" ]] || continue
+                name="$(basename "$before_file")"
+                after_file="$baseline_dir/post/$name"
+                printf '<details open><summary>%s</summary><div class="columns">' "$(html_escape "$name")"
+                printf '<section><h3>Before patch</h3><pre>'
+                html_escape_file "$before_file"
+                printf '</pre></section><section><h3>After reboot</h3><pre>'
+                if [[ -f "$after_file" ]]; then
+                    html_escape_file "$after_file"
+                else
+                    printf 'Post-reboot snapshot not captured yet.'
+                fi
+                printf '</pre></section></div></details>\n'
+            done
+        else
+            printf '<p>Linux pre-patch snapshot is not available.</p>\n'
+        fi
+        printf '<h2>Comparison diff</h2>\n'
+        if [[ -s "$state/linux_baseline_diff.txt" ]]; then
+            printf '<pre>'
+            html_escape_file "$state/linux_baseline_diff.txt"
+            printf '</pre>\n'
+        else
+            printf '<p>Post-reboot comparison is not available yet.</p>\n'
+        fi
+        printf '<h2>Verification details</h2>\n'
+        if [[ -s "$state/verification_details.txt" ]]; then
+            printf '<pre>'
+            html_escape_file "$state/verification_details.txt"
+            printf '</pre>\n'
+        else
+            printf '<p>Verification has not been run.</p>\n'
+        fi
+        printf '</body></html>\n'
+    } > "$report"
+    chmod 600 "$report"
+}
+
 # ----------------------------- Report generation --------------------------
 
 generate_report() {
@@ -537,6 +636,7 @@ generate_report() {
         echo "RPM inventory           : $state/rpm_inventory.txt"
         echo "Linux baseline         : $(get_value "$state/config_backup_dir")"
         echo "Linux baseline diff    : $(get_value "$state/linux_baseline_diff")"
+        echo "HTML report             : $state/patch_execution_report.html"
         echo "Package changes         : $state/package_changes.txt"
         echo "DNF transaction details : $state/dnf_history_info.txt"
         echo "Verification details    : $state/verification_details.txt"
@@ -546,7 +646,9 @@ generate_report() {
         echo "=============================================================="
     } > "$report"
 
+    generate_html_report "$state"
     log "Report generated: $report"
+    log "HTML report generated: $state/patch_execution_report.html"
 }
 
 # ----------------------------- State selection ----------------------------
