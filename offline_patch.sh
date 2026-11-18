@@ -45,6 +45,7 @@ DATE_TAG="$(date +%Y%m%d_%H%M%S)"
 RUN_ID=""
 ACTIVE_STATE=""
 CURRENT_COMMAND=""
+CURRENT_PHASE="initialization"
 OS_ID=""
 OS_VERSION_ID=""
 OS_MAJOR=""
@@ -181,9 +182,11 @@ handle_error() {
         local status
         status="$(get_value "$ACTIVE_STATE/status")"
 
-        if [[ "$status" == "DOWNLOADING" || "$status" == "INSTALLING" ]]; then
+        if [[ "$status" == "DOWNLOADING" || "$status" == "INSTALLING" || "$status" == "VERIFYING" ]]; then
             set_value "$ACTIVE_STATE/status" "FAILED"
             set_value "$ACTIVE_STATE/error" "Command failed at line $line with exit code $rc"
+            set_value "$ACTIVE_STATE/failed_phase" "$CURRENT_PHASE"
+            set_value "$ACTIVE_STATE/failed_at" "$(date '+%F %T %Z')"
         fi
     fi
 
@@ -368,6 +371,9 @@ generate_report() {
         echo "Hostname                : $HOST"
         echo "Run ID                  : $(basename "$state")"
         echo "Lifecycle status        : $(get_value "$state/status")"
+        echo "Failed phase            : $(get_value "$state/failed_phase")"
+        echo "Failure time            : $(get_value "$state/failed_at")"
+        echo "Error                   : $(get_value "$state/error")"
         echo "Download admin          : $(get_value "$state/download_admin")"
         echo "Install admin           : $(get_value "$state/install_admin")"
         echo "Verification admin      : $(get_value "$state/verification_admin")"
@@ -466,6 +472,7 @@ create_new_state() {
 download_updates() {
     local state repo_dir admin_user admin_home rpm_count
 
+    CURRENT_PHASE="repository connectivity check"
     check_repository_connectivity ||
         die "Repository connectivity validation failed."
 
@@ -486,6 +493,7 @@ download_updates() {
     set_value "$state/inventory_home" "$admin_home"
     set_value "$state/dns_test_name" "$DNS_TEST_NAME"
 
+    CURRENT_PHASE="download prerequisites"
     log "Installing required download tools if missing..."
 
     if ! command -v createrepo_c >/dev/null 2>&1 ||
@@ -496,6 +504,7 @@ download_updates() {
     check_repository_connectivity ||
         die "Repository connectivity validation failed after prerequisite installation."
 
+    CURRENT_PHASE="download preparation"
     backup_dns "$state"
 
     log "Capturing RPM inventory..."
@@ -504,6 +513,7 @@ download_updates() {
     chown "$admin_user" "$admin_home/rpm_inventory_${RUN_ID}.txt"
 
     log "Downloading available package updates..."
+    CURRENT_PHASE="package download"
     dnf \
         --setopt=skip_if_unavailable=False \
         --setopt=retries="$DNF_RETRIES" \
@@ -525,6 +535,7 @@ download_updates() {
     fi
 
     log "Creating local repository metadata..."
+    CURRENT_PHASE="repository metadata generation"
     createrepo_c "$repo_dir"
 
     (
@@ -581,6 +592,7 @@ install_updates() {
     local boot_id_before transaction_id history_file
     local before_file after_file
 
+    CURRENT_PHASE="install selection"
     state="$(select_state "DOWNLOADED" "Select a downloaded patch run")"
     ACTIVE_STATE="$state"
 
@@ -600,6 +612,7 @@ install_updates() {
     [[ "$ARCH" == "$(get_value "$state/arch")" ]] ||
         die "Architecture mismatch."
 
+    CURRENT_PHASE="repository validation"
     validate_repository "$state" "$repo_dir"
     set_value "$state/repository_checksum_status" "PASSED"
 
@@ -631,9 +644,19 @@ install_updates() {
     echo
     read -r -p "Proceed with installation? (yes/no): " answer
 
-    [[ "$answer" == "yes" ]] ||
-        die "Installation cancelled by administrator."
+    if [[ "$answer" != "yes" ]]; then
+        set_value "$state/status" "CANCELLED"
+        set_value "$state/cancelled_phase" "installation confirmation"
+        set_value "$state/cancelled_at" "$(date '+%F %T %Z')"
+        set_value "$state/cancellation_reason" "Administrator declined installation; no DNF install command was run."
+        set_value "$state/install_completed" "NOT_STARTED"
+        ACTIVE_STATE=""
+        generate_report "$state"
+        log "Installation cancelled. Run remains available for inspection; to retry, use report for details, then rerun download to create a fresh patch run."
+        return 0
+    fi
 
+    CURRENT_PHASE="package installation"
     log "Installing updates from the local repository only..."
 
     dnf \
@@ -733,6 +756,7 @@ verify_updates() {
     local failure_file details_file
     local verification_admin
 
+    CURRENT_PHASE="verification selection"
     state="$(select_state "INSTALLED_PENDING_REBOOT" "Select an installed patch run to verify")"
 
     ACTIVE_STATE="$state"
@@ -746,6 +770,8 @@ verify_updates() {
     set_value "$state/verification_admin" "$verification_admin"
     set_value "$state/verification_attempt_time" "$(date '+%F %T %Z')"
     set_value "$state/verification_status" "RUNNING"
+    set_value "$state/status" "VERIFYING"
+    CURRENT_PHASE="post-reboot verification"
 
     log "Starting automatic post-reboot verification..."
 
@@ -917,6 +943,29 @@ report_updates() {
     cat "$state/patch_execution_report.txt"
 }
 
+# ----------------------------- INSPECT -----------------------------------
+
+inspect_updates() {
+    local state
+    state="$(select_state "" "Select a patch run to inspect")"
+    echo "Run directory : $state"
+    echo "Status        : $(get_value "$state/status")"
+    echo "Failed phase  : $(get_value "$state/failed_phase")"
+    echo "Failure time  : $(get_value "$state/failed_at")"
+    echo "Error         : $(get_value "$state/error")"
+    echo "Cancellation  : $(get_value "$state/cancellation_reason")"
+    echo "Repo path     : $(get_value "$state/repo_dir")"
+    echo "Report        : $state/patch_execution_report.txt"
+    case "$(get_value "$state/status")" in
+        FAILED)
+            echo "Recovery      : Review the error and report. Do not rerun install blindly; check 'dnf history info last' and package state first. For a failed download, retain the run for diagnosis and start a fresh download after correcting the cause."
+            ;;
+        CANCELLED)
+            echo "Recovery      : No installation was started. Start a fresh download to create a new installable run."
+            ;;
+    esac
+}
+
 # ----------------------------- MAIN ---------------------------------------
 
 main() {
@@ -943,6 +992,9 @@ main() {
         report)
             report_updates
             ;;
+        inspect)
+            inspect_updates
+            ;;
         *)
             cat <<EOF
 Offline Patch Management Script v$SCRIPT_VERSION
@@ -953,12 +1005,14 @@ Usage:
   sudo reboot
   sudo $0 verify
   sudo $0 report
+  sudo $0 inspect
 
 Commands:
   download  Validate enabled repositories and download updates locally.
   install   Install updates from the local repository only.
   verify    Automatically verify the post-reboot state.
   report    Generate and display the patch execution report.
+  inspect   Inspect a run's status, failure phase, and recovery guidance.
 
 Supported:
   Rocky Linux / RHEL 8 and 9 (DNF4)
