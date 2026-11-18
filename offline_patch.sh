@@ -32,6 +32,10 @@ REPO_ID="offline-local"
 # For example: "your-internal-repo.company.example"
 DNS_TEST_NAME="rockylinux.org"
 
+# Optional MinIO alias configured for the root account with `mc alias set`.
+# When set, the script exports server settings, IAM, and bucket metadata.
+MINIO_ALIAS=""
+
 CONNECTIVITY_ATTEMPTS=3
 CONNECTIVITY_RETRY_DELAY=10
 DNF_TIMEOUT=30
@@ -66,14 +70,108 @@ require_root() {
     [[ "${EUID}" -eq 0 ]] || die "Run this script as root using sudo."
 }
 
+require_persistent_session() {
+    if [[ -n "${STY:-}" ]]; then
+        log "Running inside GNU screen session: ${STY}"
+        return 0
+    fi
+    if [[ -n "${TMUX:-}" ]]; then
+        log "Running inside tmux session: ${TMUX}"
+        return 0
+    fi
+    die "Run '$0 $1' inside GNU screen or tmux so the session survives an SSH disconnect. Start screen/tmux, reconnect to it, then rerun this command."
+}
+
 check_commands() {
     local cmd
-    for cmd in dnf rpm sha256sum awk sed grep sort comm hostname stat \
+    for cmd in dnf rpm sha256sum awk sed grep sort comm hostname stat tar \
                getent timeout flock date find basename readlink cp chmod \
-               chown cat wc tr sleep xargs paste cmp; do
+               chown cat wc tr sleep xargs paste cmp ip df lsblk findmnt systemctl diff; do
         command -v "$cmd" >/dev/null 2>&1 ||
             die "Required command not found: $cmd"
     done
+}
+
+# ----------------------------- Local configuration backup ----------------
+
+backup_configs() {
+    local state="$1"
+    local backup_dir
+    local manifest_hash
+    local config_path
+    local -a config_paths=()
+
+    if [[ -n "$(get_value "$state/config_backup_dir")" ]]; then
+        backup_dir="$state/linux-recovery-baseline-$(date +%Y%m%d_%H%M%S)_$$"
+    else
+        backup_dir="$state/linux-baseline"
+    fi
+
+    mkdir -m 700 -p "$backup_dir"
+    chmod 700 "$backup_dir"
+
+    log "Capturing Linux host, network, storage, and boot baseline..."
+    for config_path in /etc/hostname /etc/hosts /etc/fstab /etc/crypttab \
+        /etc/resolv.conf /etc/sysctl.conf /etc/sysctl.d \
+        /etc/NetworkManager /etc/sysconfig/network-scripts \
+        /etc/systemd/network /etc/udev/rules.d /etc/modprobe.d \
+        /etc/firewalld; do
+        [[ -e "$config_path" ]] && config_paths+=("${config_path#/}")
+    done
+    if ((${#config_paths[@]})); then
+        tar --acls --xattrs --selinux --numeric-owner \
+            -czf "$backup_dir/linux-config.tar.gz" -C / "${config_paths[@]}"
+        tar -tzf "$backup_dir/linux-config.tar.gz" >/dev/null
+        chmod 600 "$backup_dir/linux-config.tar.gz"
+    fi
+    collect_linux_snapshot "$backup_dir" before
+
+    (
+        cd "$backup_dir"
+        find . -type f ! -name SHA256SUMS ! -path './post/*' -print0 |
+            sort -z |
+            xargs -0 -r sha256sum > SHA256SUMS
+        sha256sum --check SHA256SUMS >/dev/null
+    )
+    chmod 600 "$backup_dir/SHA256SUMS"
+    manifest_hash="$(sha256sum "$backup_dir/SHA256SUMS" | awk '{print $1}')"
+
+    if [[ "$backup_dir" == "$state/linux-baseline" ]]; then
+        set_value "$state/config_backup_dir" "$backup_dir"
+        set_value "$state/config_backup_manifest_hash" "$manifest_hash"
+        set_value "$state/config_backup_created" "$(date '+%F %T %Z')"
+        set_value "$state/config_backup_status" "PASSED"
+    else
+        set_value "$state/recovery_linux_baseline_dir" "$backup_dir"
+    fi
+    log "Linux pre-patch baseline captured and verified: $backup_dir"
+}
+
+collect_linux_snapshot() {
+    local backup_dir="$1" phase="$2" output="$1/$2"
+    mkdir -p "$output"
+    chmod 700 "$output"
+    {
+        echo "Captured: $(date '+%F %T %Z')"
+        echo "Hostname: $(hostname -f 2>/dev/null || hostname)"
+        echo "Kernel: $(uname -r)"
+        echo "Boot ID: $(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)"
+        echo "OS: $(. /etc/os-release; printf '%s %s' "${PRETTY_NAME:-unknown}" "${VERSION_ID:-}")"
+    } > "$output/host.txt"
+    df -hT > "$output/df-hT.txt" 2>&1 || true
+    lsblk -a -o NAME,KNAME,TYPE,SIZE,FSTYPE,UUID,MOUNTPOINTS > "$output/lsblk.txt" 2>&1 || lsblk -a > "$output/lsblk.txt" 2>&1 || true
+    findmnt --real > "$output/findmnt.txt" 2>&1 || mount > "$output/mounts.txt" 2>&1 || true
+    ip -brief address > "$output/ip-address.txt" 2>&1 || true
+    ip route show table all > "$output/ip-routes.txt" 2>&1 || true
+    ip rule show > "$output/ip-rules.txt" 2>&1 || true
+    ip -6 route show table all > "$output/ip6-routes.txt" 2>&1 || true
+    if command -v nmcli >/dev/null 2>&1; then
+        nmcli -f GENERAL,IP4,IP6 device show > "$output/nmcli-devices.txt" 2>&1 || true
+        nmcli connection show --active > "$output/nmcli-active-connections.txt" 2>&1 || true
+    fi
+    systemctl --failed --no-legend > "$output/failed-services.txt" 2>&1 || true
+    systemctl get-default > "$output/systemd-default-target.txt" 2>&1 || true
+    chmod 600 "$output"/* 2>/dev/null || true
 }
 
 get_os_info() {
@@ -392,6 +490,10 @@ generate_report() {
         echo "---------------------- Installation -------------------------"
         echo "Install started         : $(get_value "$state/install_started")"
         echo "Install completed       : $(get_value "$state/install_completed")"
+        echo "Linux baseline status   : $(get_value "$state/config_backup_status")"
+        echo "Linux baseline path     : $(get_value "$state/config_backup_dir")"
+        echo "Recovery baseline path  : $(get_value "$state/recovery_linux_baseline_dir")"
+        echo "External copy confirmed : $(get_value "$state/config_backup_copy_confirmed")"
         echo "Recovery started        : $(get_value "$state/recovery_started")"
         echo "Recovery completed      : $(get_value "$state/recovery_completed")"
         echo "Recovery result         : $(get_value "$state/recovery_result")"
@@ -433,6 +535,8 @@ generate_report() {
         echo
         echo "---------------------- Supporting Files ---------------------"
         echo "RPM inventory           : $state/rpm_inventory.txt"
+        echo "Linux baseline         : $(get_value "$state/config_backup_dir")"
+        echo "Linux baseline diff    : $(get_value "$state/linux_baseline_diff")"
         echo "Package changes         : $state/package_changes.txt"
         echo "DNF transaction details : $state/dnf_history_info.txt"
         echo "Verification details    : $state/verification_details.txt"
@@ -593,9 +697,10 @@ install_updates() {
     local state repo_dir status
     local kernel_before kernel_after default_kernel expected_kernel
     local boot_id_before transaction_id history_file
-    local before_file after_file
+    local before_file after_file answer backup_dir
 
     CURRENT_PHASE="install selection"
+    require_persistent_session install
     state="$(select_state "DOWNLOADED" "Select a downloaded patch run")"
     ACTIVE_STATE="$state"
 
@@ -618,19 +723,6 @@ install_updates() {
     CURRENT_PHASE="repository validation"
     validate_repository "$state" "$repo_dir"
     set_value "$state/repository_checksum_status" "PASSED"
-
-    kernel_before="$(uname -r)"
-    boot_id_before="$(cat /proc/sys/kernel/random/boot_id)"
-
-    set_value "$state/install_admin" "$(get_admin)"
-    set_value "$state/install_started" "$(date '+%F %T %Z')"
-    set_value "$state/kernel_before_install" "$kernel_before"
-    set_value "$state/boot_id_before_install" "$boot_id_before"
-    set_value "$state/status" "INSTALLING"
-
-    before_file="$state/packages_before.txt"
-    after_file="$state/packages_after.txt"
-    capture_rpm_inventory "$before_file"
 
     log "Checking available updates in the local repository..."
     dnf \
@@ -659,7 +751,35 @@ install_updates() {
         return 0
     fi
 
+    CURRENT_PHASE="configuration backup"
+    backup_configs "$state"
+    backup_dir="$(get_value "$state/config_backup_dir")"
+    echo
+    echo "Configuration backup: $backup_dir"
+    echo "This copy is on the server being patched. Copy it to separate secure storage before proceeding."
+    read -r -p "Have you copied the backup elsewhere, or do you accept the risk of keeping only the local copy? (yes/no): " answer
+    if [[ "$answer" != "yes" ]]; then
+        set_value "$state/config_backup_copy_confirmed" "NO"
+        ACTIVE_STATE=""
+        generate_report "$state"
+        log "Installation stopped before package changes. The run remains DOWNLOADED; copy the backup elsewhere and rerun install."
+        return 0
+    fi
+    set_value "$state/config_backup_copy_confirmed" "YES"
+
+    kernel_before="$(uname -r)"
+    boot_id_before="$(cat /proc/sys/kernel/random/boot_id)"
+    set_value "$state/install_admin" "$(get_admin)"
+    set_value "$state/install_started" "$(date '+%F %T %Z')"
+    set_value "$state/kernel_before_install" "$kernel_before"
+    set_value "$state/boot_id_before_install" "$boot_id_before"
+    before_file="$state/packages_before.txt"
+    after_file="$state/packages_after.txt"
+    CURRENT_PHASE="install preparation"
+    capture_rpm_inventory "$before_file"
+
     CURRENT_PHASE="package installation"
+    set_value "$state/status" "INSTALLING"
     log "Installing updates from the local repository only..."
 
     dnf \
@@ -755,6 +875,8 @@ recover_updates() {
     local kernel_after default_kernel expected_kernel
     local -a recoverable_states=()
 
+    require_persistent_session recover
+
     while IFS= read -r state; do
         [[ -n "$state" ]] || continue
         status="$(get_value "$state/status")"
@@ -818,6 +940,19 @@ recover_updates() {
         log "Recovery cancelled. No DNF install command was run. The run remains unchanged."
         return 0
     fi
+
+    CURRENT_PHASE="recovery configuration backup"
+    backup_configs "$state"
+    echo
+    echo "Pre-recovery baseline: $(get_value "$state/recovery_linux_baseline_dir")"
+    echo "Copy it to separate secure storage before proceeding."
+    read -r -p "Have you copied the backup elsewhere, or do you accept the risk of keeping only the local copy? (yes/no): " answer
+    if [[ "$answer" != "yes" ]]; then
+        set_value "$state/config_backup_copy_confirmed" "NO"
+        log "Recovery stopped before package changes. The interrupted run is unchanged."
+        return 0
+    fi
+    set_value "$state/config_backup_copy_confirmed" "YES"
 
     set_value "$state/recovery_started" "$(date '+%F %T %Z')"
     set_value "$state/recovery_admin" "$(get_admin)"
@@ -914,6 +1049,20 @@ verify_updates() {
     CURRENT_PHASE="post-reboot verification"
 
     log "Starting automatic post-reboot verification..."
+
+    local baseline_dir
+    baseline_dir="$(get_value "$state/config_backup_dir")"
+    if [[ -n "$baseline_dir" && -d "$baseline_dir/before" ]]; then
+        collect_linux_snapshot "$baseline_dir" post
+        diff -ru "$baseline_dir/before" "$baseline_dir/post" \
+            > "$state/linux_baseline_diff.txt" || true
+        set_value "$state/linux_baseline_diff" "$state/linux_baseline_diff.txt"
+        echo "INFO: Linux post-reboot snapshot captured; differences are recorded in $state/linux_baseline_diff.txt" |
+            tee -a "$details_file"
+    else
+        echo "INFO: No Linux pre-patch baseline is available for comparison." |
+            tee -a "$details_file"
+    fi
 
     # 1. Reboot detection using boot ID.
     previous_boot_id="$(get_value "$state/boot_id_before_install")"
