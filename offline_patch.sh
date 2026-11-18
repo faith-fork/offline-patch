@@ -44,6 +44,9 @@ CONNECTIVITY_ATTEMPTS=3
 CONNECTIVITY_RETRY_DELAY=10
 DNF_TIMEOUT=30
 DNF_RETRIES=2
+DOWNLOAD_SPACE_BUFFER_PERCENT=30
+MIN_REPO_FREE_BYTES=1073741824
+MIN_STATE_FREE_BYTES=536870912
 
 # -------------------------------------------------------------------------
 
@@ -94,6 +97,94 @@ check_commands() {
         command -v "$cmd" >/dev/null 2>&1 ||
             die "Required command not found: $cmd"
     done
+}
+
+available_bytes() {
+    local path="$1"
+    df -B1 --output=avail "$path" 2>/dev/null | awk 'NR == 2 {print $1}'
+}
+
+fail_download_preflight() {
+    local state="$1" message="$2"
+    set_value "$state/status" "FAILED"
+    set_value "$state/failed_phase" "$CURRENT_PHASE"
+    set_value "$state/failed_at" "$(date '+%F %T %Z')"
+    set_value "$state/error" "$message"
+    generate_report "$state"
+    ACTIVE_STATE=""
+    die "$message"
+}
+
+check_download_space() {
+    local state="$1" repo_dir="$2" estimate_output estimate_bytes
+    local repo_available state_available repo_required
+
+    log "Estimating the upgrade download size and checking free space..."
+    estimate_output="$(LC_ALL=C dnf \
+        --setopt=skip_if_unavailable=False \
+        --setopt=retries="$DNF_RETRIES" \
+        --setopt=timeout="$DNF_TIMEOUT" \
+        upgrade --assumeno 2>&1 || true)"
+    printf '%s\n' "$estimate_output" > "$state/dnf_space_estimate.txt"
+
+    estimate_bytes="$(awk '
+        /^Total download size:/ {
+            amount=$(NF-1); unit=$NF; gsub(/,/, "", amount)
+            factor=1
+            if (unit ~ /^[kK]([bB])?$/) factor=1024
+            else if (unit ~ /^[mM]([bB])?$/) factor=1024^2
+            else if (unit ~ /^[gG]([bB])?$/) factor=1024^3
+            else if (unit ~ /^[tT]([bB])?$/) factor=1024^4
+            else if (unit !~ /^[bB]$/) exit 1
+            printf "%.0f\n", amount * factor
+            found=1
+            exit
+        }
+        END { if (!found) exit 1 }
+    ' <<< "$estimate_output" 2>/dev/null || true)"
+    if [[ -z "$estimate_bytes" ]] && grep -Fqi "Nothing to do" <<< "$estimate_output"; then
+        estimate_bytes=0
+    fi
+    if [[ ! "$estimate_bytes" =~ ^[0-9]+$ ]]; then
+        set_value "$state/download_space_preflight_status" "FAILED"
+        fail_download_preflight "$state" "Could not estimate the DNF upgrade download size. Review $state/dnf_space_estimate.txt; no packages were downloaded."
+    fi
+
+    repo_available="$(available_bytes "$repo_dir")"
+    state_available="$(available_bytes "$state")"
+    if [[ ! "$repo_available" =~ ^[0-9]+$ || ! "$state_available" =~ ^[0-9]+$ ]]; then
+        set_value "$state/download_space_preflight_status" "FAILED"
+        fail_download_preflight "$state" "Could not determine available space for the package repository or run-state filesystem."
+    fi
+
+    repo_required=$((estimate_bytes + estimate_bytes * DOWNLOAD_SPACE_BUFFER_PERCENT / 100 + MIN_REPO_FREE_BYTES))
+    set_value "$state/download_size_estimate_bytes" "$estimate_bytes"
+    set_value "$state/repository_space_available_bytes" "$repo_available"
+    set_value "$state/repository_space_required_bytes" "$repo_required"
+    set_value "$state/state_space_available_bytes" "$state_available"
+    set_value "$state/state_space_required_bytes" "$MIN_STATE_FREE_BYTES"
+
+    {
+        echo "Package repository path: $repo_dir"
+        echo "Package repository filesystem available bytes: $repo_available"
+        echo "Estimated package download bytes: $estimate_bytes"
+        echo "Repository free space required bytes (estimate + ${DOWNLOAD_SPACE_BUFFER_PERCENT}% buffer + reserve): $repo_required"
+        echo "Run-state path: $state"
+        echo "Run-state filesystem available bytes: $state_available"
+        echo "Run-state free space required bytes: $MIN_STATE_FREE_BYTES"
+    } > "$state/download_space_preflight.txt"
+
+    if ((repo_available < repo_required)); then
+        set_value "$state/download_space_preflight_status" "FAILED"
+        fail_download_preflight "$state" "Insufficient free space on the filesystem containing $repo_dir: available $repo_available bytes; required $repo_required bytes. See $state/download_space_preflight.txt."
+    fi
+    if ((state_available < MIN_STATE_FREE_BYTES)); then
+        set_value "$state/download_space_preflight_status" "FAILED"
+        fail_download_preflight "$state" "Insufficient free space on the filesystem containing $state: available $state_available bytes; required $MIN_STATE_FREE_BYTES bytes. See $state/download_space_preflight.txt."
+    fi
+
+    set_value "$state/download_space_preflight_status" "PASSED"
+    log "Space preflight passed: estimated download $estimate_bytes bytes; repository available $repo_available bytes; run-state available $state_available bytes."
 }
 
 # ----------------------------- Local configuration backup ----------------
@@ -530,12 +621,20 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f8fafc;padding:1rem;
 <h1>Linux Patch Report</h1>
 HTML
         printf '<table><tbody>\n'
-        for name in Hostname Run_ID Lifecycle_status Verification_status Install_started Install_completed Verification_completed; do
+        for name in Hostname Run_ID Lifecycle_status Verification_status Space_preflight \
+            Upgrade_size_estimate_bytes Repository_space_available_bytes \
+            Repository_space_required_bytes State_space_available_bytes \
+            Install_started Install_completed Verification_completed; do
             case "$name" in
                 Hostname) value="$HOST" ;;
                 Run_ID) value="$(basename "$state")" ;;
                 Lifecycle_status) value="$(get_value "$state/status")" ;;
                 Verification_status) value="$(get_value "$state/verification_status")" ;;
+                Space_preflight) value="$(get_value "$state/download_space_preflight_status")" ;;
+                Upgrade_size_estimate_bytes) value="$(get_value "$state/download_size_estimate_bytes")" ;;
+                Repository_space_available_bytes) value="$(get_value "$state/repository_space_available_bytes")" ;;
+                Repository_space_required_bytes) value="$(get_value "$state/repository_space_required_bytes")" ;;
+                State_space_available_bytes) value="$(get_value "$state/state_space_available_bytes")" ;;
                 Install_started) value="$(get_value "$state/install_started")" ;;
                 Install_completed) value="$(get_value "$state/install_completed")" ;;
                 Verification_completed) value="$(get_value "$state/verification_completed")" ;;
@@ -618,6 +717,11 @@ generate_report() {
         echo "Repository path         : $(get_value "$state/repo_dir")"
         echo "RPM count               : $(get_value "$state/rpm_count")"
         echo "Repository checksum     : $(get_value "$state/repository_checksum_status")"
+        echo "Space preflight         : $(get_value "$state/download_space_preflight_status")"
+        echo "Upgrade size estimate   : $(get_value "$state/download_size_estimate_bytes") bytes"
+        echo "Repository space avail  : $(get_value "$state/repository_space_available_bytes") bytes"
+        echo "Repository space need   : $(get_value "$state/repository_space_required_bytes") bytes"
+        echo "State space available   : $(get_value "$state/state_space_available_bytes") bytes"
         echo
         echo "---------------------- Installation -------------------------"
         echo "Install started         : $(get_value "$state/install_started")"
@@ -667,6 +771,8 @@ generate_report() {
         echo
         echo "---------------------- Supporting Files ---------------------"
         echo "RPM inventory           : $state/rpm_inventory.txt"
+        echo "Space preflight details : $state/download_space_preflight.txt"
+        echo "DNF size estimate       : $state/dnf_space_estimate.txt"
         echo "Linux baseline         : $(get_value "$state/config_backup_dir")"
         echo "Linux baseline diff    : $(get_value "$state/linux_baseline_diff")"
         echo "HTML report             : $state/patch_execution_report.html"
@@ -745,6 +851,9 @@ download_updates() {
 
     check_repository_connectivity ||
         die "Repository connectivity validation failed after prerequisite installation."
+
+    CURRENT_PHASE="download space preflight"
+    check_download_space "$state" "$repo_dir"
 
     CURRENT_PHASE="download preparation"
     backup_dns "$state"
