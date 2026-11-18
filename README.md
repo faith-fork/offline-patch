@@ -12,6 +12,14 @@
 
 The default RPM repository path is `/usr/local/src`. Run state and reports are stored under `/var/lib/offline-patching/<hostname>`. A lock file prevents two copies of this script from running at the same time.
 
+## Linux pre-patch baseline
+
+Before installing or recovering packages, the script records a root-only Linux baseline in the selected run's state directory. It archives selected host, DNS, network, storage, firewall, sysctl, and boot configuration from `/etc`, and captures host/kernel identity, `df -hT`, `lsblk`, mount points, IP addresses, IPv4 and IPv6 routes, policy rules, active NetworkManager connections (when available), failed systemd units, and the default target.
+
+After reboot, `verify` captures those command outputs again and writes a recursive comparison to `linux_baseline_diff.txt`. This is a review aid: expected package changes and dynamic state can create differences, so the diff is not an automatic pass/fail criterion. The baseline archive is not automatically restored. The artifacts are stored locally under `/var/lib/offline-patching/<hostname>` with restrictive permissions; copy them to secure external storage if they must survive server or disk loss. Configuration files and network output can contain sensitive information.
+
+MinIO configuration, IAM, bucket metadata, and object data are outside this Linux baseline and will be handled separately. The Linux verification does not claim to validate MinIO service behavior.
+
 ## Standard workflow
 
 1. Download updates while repositories are available:
