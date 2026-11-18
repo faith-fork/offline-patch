@@ -392,6 +392,9 @@ generate_report() {
         echo "---------------------- Installation -------------------------"
         echo "Install started         : $(get_value "$state/install_started")"
         echo "Install completed       : $(get_value "$state/install_completed")"
+        echo "Recovery started        : $(get_value "$state/recovery_started")"
+        echo "Recovery completed      : $(get_value "$state/recovery_completed")"
+        echo "Recovery result         : $(get_value "$state/recovery_result")"
         echo "DNF transaction ID      : $(get_value "$state/dnf_transaction_id")"
         echo "Kernel before install   : $(get_value "$state/kernel_before_install")"
         echo "Kernel after install    : $(get_value "$state/kernel_after_install")"
@@ -575,7 +578,7 @@ EOF
     set_value "$state/repository_manifest_hash" \
         "$(sha256sum "$repo_dir/SHA256SUMS" | awk '{print $1}')"
 
-    ACTIVE_STATE=""
+    ACTIVE_STATE="$state"
     generate_report "$state"
 
     log "Download completed successfully."
@@ -742,6 +745,143 @@ install_updates() {
     echo "  1. Schedule and perform a manual reboot during the maintenance window."
     echo "  2. After the server returns, run: sudo ./offline_patch.sh verify"
     echo "  3. Generate the report using: sudo ./offline_patch.sh report"
+}
+
+# ----------------------------- RECOVER -----------------------------------
+
+recover_updates() {
+    local state status failed_phase repo_dir answer
+    local before_file after_file transaction_id history_file
+    local kernel_after default_kernel expected_kernel
+    local -a recoverable_states=()
+
+    while IFS= read -r state; do
+        [[ -n "$state" ]] || continue
+        status="$(get_value "$state/status")"
+        failed_phase="$(get_value "$state/failed_phase")"
+        if [[ "$status" == "INSTALLING" ||
+              ( "$status" == "FAILED" &&
+                ( "$failed_phase" == "package installation" ||
+                  "$failed_phase" == "package installation recovery" ) ) ]]; then
+            recoverable_states+=("$state")
+        fi
+    done < <(get_state_dirs "")
+
+    ((${#recoverable_states[@]} > 0)) ||
+        die "No interrupted or failed package installations are eligible for recovery. Use 'inspect' to review available runs."
+
+    if ((${#recoverable_states[@]} == 1)); then
+        state="${recoverable_states[0]}"
+    else
+        echo "Select an interrupted installation to recover:"
+        local i choice
+        for i in "${!recoverable_states[@]}"; do
+            printf '%d) %-25s Status: %s  Phase: %s\n' \
+                "$((i + 1))" "$(basename "${recoverable_states[$i]}")" \
+                "$(get_value "${recoverable_states[$i]}/status")" \
+                "$(get_value "${recoverable_states[$i]}/failed_phase")"
+        done
+        read -r -p "Enter selection: " choice
+        [[ "$choice" =~ ^[0-9]+$ ]] || die "Invalid selection."
+        ((choice >= 1 && choice <= ${#recoverable_states[@]})) || die "Selection out of range."
+        state="${recoverable_states[$((choice - 1))]}"
+    fi
+
+    ACTIVE_STATE=""
+    repo_dir="$(get_value "$state/repo_dir")"
+    before_file="$state/packages_before.txt"
+    after_file="$state/packages_after.txt"
+
+    [[ -s "$before_file" ]] || die "Cannot recover: the pre-install package inventory is missing."
+    [[ -d "$repo_dir" ]] || die "Cannot recover: local repository is missing: $repo_dir"
+    [[ "$OS_ID" == "$(get_value "$state/os_id")" &&
+       "$OS_MAJOR" == "$(get_value "$state/os_major")" &&
+       "$ARCH" == "$(get_value "$state/arch")" ]] ||
+        die "Cannot recover: current OS identity, major version, or architecture differs from the saved run."
+
+    CURRENT_PHASE="recovery repository validation"
+    validate_repository "$state" "$repo_dir"
+    set_value "$state/repository_checksum_status" "PASSED"
+
+    CURRENT_PHASE="recovery package database checks"
+    rpm --verifydb || die "RPM database validation failed; recovery stopped."
+    dnf --disablerepo='*' check || die "DNF found package consistency problems; recovery stopped. Review DNF output before proceeding."
+
+    echo
+    echo "Recovery will rerun the local-repository-only DNF upgrade."
+    echo "DNF may complete remaining updates or report that the run is already complete."
+    echo "Pre-install inventory: $before_file"
+    echo "Current status: $(get_value "$state/status")"
+    read -r -p "Proceed with recovery? (yes/no): " answer
+    if [[ "$answer" != "yes" ]]; then
+        ACTIVE_STATE=""
+        log "Recovery cancelled. No DNF install command was run. The run remains unchanged."
+        return 0
+    fi
+
+    set_value "$state/recovery_started" "$(date '+%F %T %Z')"
+    set_value "$state/recovery_admin" "$(get_admin)"
+    ACTIVE_STATE="$state"
+    CURRENT_PHASE="package installation recovery"
+    set_value "$state/status" "INSTALLING"
+    dnf \
+        --disablerepo='*' \
+        --repofrompath="${REPO_ID},file://${repo_dir}" \
+        --enablerepo="$REPO_ID" \
+        --setopt="${REPO_ID}.gpgcheck=0" \
+        --setopt="${REPO_ID}.repo_gpgcheck=0" \
+        --setopt=skip_if_unavailable=False \
+        upgrade -y
+
+    capture_rpm_inventory "$after_file"
+    comm -13 "$before_file" "$after_file" > "$state/packages_added.txt"
+    comm -23 "$before_file" "$after_file" > "$state/packages_removed.txt"
+    {
+        echo "Packages added or upgraded:"
+        cat "$state/packages_added.txt"
+        echo
+        echo "Packages removed or replaced:"
+        cat "$state/packages_removed.txt"
+    } > "$state/package_changes.txt"
+
+    history_file="$state/dnf_history_info.txt"
+    dnf history info last > "$history_file" 2>&1 || true
+    transaction_id="$(awk -F: 'tolower($1) ~ /transaction id/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' "$history_file")"
+    set_value "$state/dnf_transaction_id" "$transaction_id"
+
+    kernel_after="$(uname -r)"
+    set_value "$state/kernel_after_install" "$kernel_after"
+    default_kernel=""
+    expected_kernel=""
+    if command -v grubby >/dev/null 2>&1; then
+        default_kernel="$(grubby --default-kernel 2>/dev/null || true)"
+        if [[ -n "$default_kernel" ]]; then
+            expected_kernel="$(basename "$default_kernel")"
+            expected_kernel="${expected_kernel#vmlinuz-}"
+        fi
+    fi
+    set_value "$state/default_kernel_after_install" "$default_kernel"
+    set_value "$state/kernel_expected" "$expected_kernel"
+    set_value "$state/install_completed" "$(date '+%F %T %Z')"
+    set_value "$state/recovery_completed" "$(date '+%F %T %Z')"
+
+    if [[ ! -s "$state/packages_added.txt" && ! -s "$state/packages_removed.txt" ]]; then
+        set_value "$state/status" "NO_CHANGES"
+        set_value "$state/reboot_required" "NO"
+        set_value "$state/recovery_result" "NO_PACKAGE_CHANGES"
+    else
+        set_value "$state/status" "INSTALLED_PENDING_REBOOT"
+        set_value "$state/reboot_required" "YES"
+        set_value "$state/verification_status" "PENDING"
+        set_value "$state/recovery_result" "INSTALLATION_RECONCILED"
+    fi
+
+    : > "$state/error"
+    : > "$state/failed_phase"
+    : > "$state/failed_at"
+    ACTIVE_STATE=""
+    generate_report "$state"
+    log "Recovery completed. Final status: $(get_value "$state/status")."
 }
 
 # ----------------------------- VERIFY -------------------------------------
@@ -969,7 +1109,16 @@ inspect_updates() {
     echo "Report        : $state/patch_execution_report.txt"
     case "$(get_value "$state/status")" in
         FAILED)
-            echo "Recovery      : Review the error and report. Do not rerun install blindly; check 'dnf history info last' and package state first. For a failed download, retain the run for diagnosis and start a fresh download after correcting the cause."
+            if [[ "$(get_value "$state/failed_phase")" == "package installation" ||
+                  "$(get_value "$state/failed_phase")" == "package installation recovery" ||
+                  "$(get_value "$state/status")" == "INSTALLING" ]]; then
+                echo "Recovery      : After reviewing the recorded error, run 'sudo $0 recover' to validate package state and the saved repository before a confirmed local retry."
+            else
+                echo "Recovery      : Review the error and report. Correct the cause; for a failed download, start a fresh download. This run is not eligible for install recovery."
+            fi
+            ;;
+        INSTALLING)
+            echo "Recovery      : This run appears interrupted. Run 'sudo $0 recover' to validate package state and the saved repository before a confirmed local retry."
             ;;
         CANCELLED)
             echo "Recovery      : No installation was started. Start a fresh download to create a new installable run."
@@ -1006,6 +1155,9 @@ main() {
         inspect)
             inspect_updates
             ;;
+        recover)
+            recover_updates
+            ;;
         *)
             cat <<EOF
 Offline Patch Management Script v$SCRIPT_VERSION
@@ -1017,6 +1169,7 @@ Usage:
   sudo $0 verify
   sudo $0 report
   sudo $0 inspect
+  sudo $0 recover
 
 Commands:
   download  Validate enabled repositories and download updates locally.
@@ -1024,6 +1177,7 @@ Commands:
   verify    Automatically verify the post-reboot state.
   report    Generate and display the patch execution report.
   inspect   Inspect a run's status, failure phase, and recovery guidance.
+  recover   Validate and resume an interrupted local package installation.
 
 Supported:
   Rocky Linux / RHEL 8 and 9 (DNF4)
