@@ -32,10 +32,6 @@ REPO_ID="offline-local"
 # For example: "your-internal-repo.company.example"
 DNS_TEST_NAME="rockylinux.org"
 
-# Rocky Linux 10 support remains disabled until its full workflow has been
-# validated on a Rocky 10 test host. Set to "yes" only after that validation.
-ENABLE_ROCKY_10="no"
-
 # Optional MinIO alias configured for the root account with `mc alias set`.
 # When set, the script exports server settings, IAM, and bucket metadata.
 MINIO_ALIAS=""
@@ -306,12 +302,10 @@ get_os_info() {
             ;;
         10)
             [[ "$OS_ID" == "rocky" ]] ||
-                die "Major version 10 is currently supported only for Rocky Linux."
-            [[ "$ENABLE_ROCKY_10" == "yes" ]] ||
-                die "Rocky Linux 10 support is currently gated off. Validate the full workflow on a Rocky 10 test host, then set ENABLE_ROCKY_10=\"yes\" near the top of this script."
+                die "Major version 10 is supported only for Rocky Linux."
             ;;
         *)
-            die "Unsupported OS major version: $OS_MAJOR. This script targets versions 8 and 9, with gated Rocky Linux 10 support."
+            die "Unsupported OS major version: $OS_MAJOR. This script targets versions 8 and 9, plus Rocky Linux 10."
             ;;
     esac
 }
@@ -323,7 +317,7 @@ validate_rocky10_environment() {
 
     dnf_version="$(dnf --version 2>&1 | sed -n '1p')"
     [[ "$dnf_version" =~ ^4([.]|$) ]] ||
-        die "Rocky Linux 10 support requires DNF4; detected: ${dnf_version:-unknown}. DNF5 has not been validated by this script."
+        die "Rocky Linux 10 requires DNF4; detected: ${dnf_version:-unknown}."
 
     if [[ "$ARCH" == "x86_64" ]]; then
         [[ -x /lib64/ld-linux-x86-64.so.2 ]] ||
@@ -1581,7 +1575,7 @@ Commands:
 
 Supported:
   Rocky Linux / RHEL / AlmaLinux / Oracle Linux 8 and 9 (DNF4)
-  Rocky Linux 10 (gated; DNF4 and x86-64-v3 checks required)
+  Rocky Linux 10 (DNF4 and x86-64-v3 checks required)
 EOF
 }
 
