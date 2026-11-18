@@ -90,7 +90,7 @@ check_commands() {
     local cmd
     for cmd in dnf rpm sha256sum awk sed grep sort comm hostname stat tar \
                getent timeout flock date find basename readlink cp chmod \
-               chown cat wc tr sleep xargs paste cmp ip df lsblk findmnt systemctl diff; do
+               chown cat wc tr sleep xargs paste cmp ip df lsblk findmnt systemctl diff mv rmdir; do
         command -v "$cmd" >/dev/null 2>&1 ||
             die "Required command not found: $cmd"
     done
@@ -712,7 +712,7 @@ create_new_state() {
 # ----------------------------- DOWNLOAD -----------------------------------
 
 download_updates() {
-    local state repo_dir admin_user admin_home rpm_count
+    local state repo_dir download_dir package_file admin_user admin_home rpm_count repo_hash
 
     CURRENT_PHASE="repository connectivity check"
     check_repository_connectivity ||
@@ -756,11 +756,20 @@ download_updates() {
 
     log "Downloading available package updates..."
     CURRENT_PHASE="package download"
+    download_dir="$repo_dir/.dnf-download-cache"
+    mkdir -p "$download_dir"
     dnf \
         --setopt=skip_if_unavailable=False \
         --setopt=retries="$DNF_RETRIES" \
         --setopt=timeout="$DNF_TIMEOUT" \
-        upgrade --downloadonly --downloaddir="$repo_dir" -y
+        upgrade --downloadonly --downloaddir="$download_dir" -y
+
+    # DNF4 tracks --downloadonly packages as cache files and may remove them
+    # after a later successful transaction. Move them out of its tracked path.
+    while IFS= read -r -d '' package_file; do
+        mv -- "$package_file" "$repo_dir/"
+    done < <(find "$download_dir" -type f -name '*.rpm' -print0)
+    rmdir "$download_dir" 2>/dev/null || true
 
     rpm_count="$(find "$repo_dir" -maxdepth 1 -type f -name '*.rpm' | wc -l | tr -d ' ')"
 
@@ -787,15 +796,6 @@ download_updates() {
             xargs -0 -r sha256sum > SHA256SUMS
     )
 
-    local repo_hash
-    repo_hash="$(sha256sum "$repo_dir/SHA256SUMS" | awk '{print $1}')"
-
-    set_value "$state/rpm_count" "$rpm_count"
-    set_value "$state/repository_checksum_status" "CREATED"
-    set_value "$state/repository_manifest_hash" "$repo_hash"
-    set_value "$state/download_completed" "$(date '+%F %T %Z')"
-    set_value "$state/status" "DOWNLOADED"
-
     cat > "$repo_dir/REPOSITORY_INFO.txt" <<EOF
 Run ID: $RUN_ID
 Hostname: $HOST
@@ -812,10 +812,15 @@ EOF
         find . -type f ! -name SHA256SUMS -print0 |
             sort -z |
             xargs -0 -r sha256sum > SHA256SUMS
+        sha256sum --check SHA256SUMS
     )
 
-    set_value "$state/repository_manifest_hash" \
-        "$(sha256sum "$repo_dir/SHA256SUMS" | awk '{print $1}')"
+    repo_hash="$(sha256sum "$repo_dir/SHA256SUMS" | awk '{print $1}')"
+    set_value "$state/rpm_count" "$rpm_count"
+    set_value "$state/repository_checksum_status" "PASSED"
+    set_value "$state/repository_manifest_hash" "$repo_hash"
+    set_value "$state/download_completed" "$(date '+%F %T %Z')"
+    set_value "$state/status" "DOWNLOADED"
 
     ACTIVE_STATE="$state"
     generate_report "$state"
