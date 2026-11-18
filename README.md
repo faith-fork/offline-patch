@@ -16,7 +16,7 @@ The default RPM repository path is `/usr/local/src`. Run state and reports are s
 
 Before installing or recovering packages, the script records a root-only Linux baseline in the selected run's state directory. It archives selected host, DNS, network, storage, firewall, sysctl, and boot configuration from `/etc`, and captures host/kernel identity, `df -hT`, `lsblk`, mount points, IP addresses, IPv4 and IPv6 routes, policy rules, active NetworkManager connections (when available), failed systemd units, and the default target.
 
-After reboot, `verify` captures those command outputs again and writes a recursive comparison to `linux_baseline_diff.txt`. This is a review aid: expected package changes and dynamic state can create differences, so the diff is not an automatic pass/fail criterion. The baseline archive is not automatically restored. The artifacts are stored locally under `/var/lib/offline-patching/<hostname>` with restrictive permissions; copy them to secure external storage if they must survive server or disk loss. Configuration files and network output can contain sensitive information.
+After reboot, `verify` captures those command outputs again and writes a recursive comparison to `linux_baseline_diff.txt`. It also generates `patch_execution_report.html` with the pre-patch and post-reboot outputs side by side, the diff, and verification details. The HTML report is generated when the text report is generated and can be refreshed with `sudo ./offline_patch.sh report`. Differences are a review aid: expected package changes and dynamic state can appear, so they are not an automatic pass/fail criterion. The baseline archive is not automatically restored. Artifacts are stored locally under `/var/lib/offline-patching/<hostname>` with restrictive permissions; copy them to secure external storage if they must survive server or disk loss. Configuration files and network output can contain sensitive information.
 
 MinIO configuration, IAM, bucket metadata, and object data are outside this Linux baseline and will be handled separately. The Linux verification does not claim to validate MinIO service behavior.
 
@@ -46,11 +46,13 @@ MinIO configuration, IAM, bucket metadata, and object data are outside this Linu
    sudo ./offline_patch.sh verify
    ```
 
-4. View a run's report:
+4. View a run's reports:
 
    ```bash
    sudo ./offline_patch.sh report
    ```
+
+   The command displays the text report and writes `patch_execution_report.html` in the selected run directory. Open that HTML file in a browser to review the pre/post comparison.
 
 ## Inspecting and recovering a run
 
