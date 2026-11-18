@@ -212,9 +212,7 @@ get_os_info() {
 }
 
 validate_rocky10_environment() {
-    local dnf_version cpu_flags flag
-    local -a required_cpu_flags=(avx avx2 bmi1 bmi2 f16c fma abm movbe xsave \
-        sse3 sse4_1 sse4_2 ssse3 popcnt cx16 lahf_lm)
+    local dnf_version loader_help
 
     [[ "$OS_ID" == "rocky" && "$OS_MAJOR" == "10" ]] || return 0
 
@@ -223,12 +221,11 @@ validate_rocky10_environment() {
         die "Rocky Linux 10 support requires DNF4; detected: ${dnf_version:-unknown}. DNF5 has not been validated by this script."
 
     if [[ "$ARCH" == "x86_64" ]]; then
-        cpu_flags="$(awk -F: '/^flags[[:space:]]*:/{gsub(/^[[:space:]]+/, "", $2); print $2; exit}' /proc/cpuinfo)"
-        [[ -n "$cpu_flags" ]] || die "Unable to read CPU flags to verify Rocky Linux 10's x86-64-v3 requirement."
-        for flag in "${required_cpu_flags[@]}"; do
-            [[ " $cpu_flags " == *" $flag "* ]] ||
-                die "CPU does not expose required x86-64-v3 flag '$flag'; Rocky Linux 10 patching is stopped."
-        done
+        [[ -x /lib64/ld-linux-x86-64.so.2 ]] ||
+            die "Cannot locate the x86_64 dynamic loader to verify the x86-64-v3 CPU baseline."
+        loader_help="$(/lib64/ld-linux-x86-64.so.2 --help 2>&1)"
+        grep -Eq 'x86-64-v3 \(supported, searched\)' <<< "$loader_help" ||
+            die "CPU or virtual machine does not expose the x86-64-v3 capability required by Rocky Linux 10."
     fi
 }
 
@@ -1415,7 +1412,41 @@ inspect_updates() {
 
 # ----------------------------- MAIN ---------------------------------------
 
+show_usage() {
+    cat <<EOF
+Offline Patch Management Script v$SCRIPT_VERSION
+
+Usage:
+  sudo $0 download
+  sudo $0 install
+  sudo reboot
+  sudo $0 verify
+  sudo $0 report
+  sudo $0 inspect
+  sudo $0 recover
+
+Commands:
+  download  Validate enabled repositories and download updates locally.
+  install   Install updates from the local repository only.
+  verify    Automatically verify the post-reboot state.
+  report    Generate and display the patch execution report.
+  inspect   Inspect a run's status, failure phase, and recovery guidance.
+  recover   Validate and retry an interrupted local package installation.
+
+Supported:
+  Rocky Linux / RHEL / AlmaLinux / Oracle Linux 8 and 9 (DNF4)
+  Rocky Linux 10 (gated; DNF4 and x86-64-v3 checks required)
+EOF
+}
+
 main() {
+    case "${1:-}" in
+        -h|--help|help)
+            show_usage
+            return 0
+            ;;
+    esac
+
     require_root
     check_commands
     get_os_info
@@ -1447,31 +1478,7 @@ main() {
             recover_updates
             ;;
         *)
-            cat <<EOF
-Offline Patch Management Script v$SCRIPT_VERSION
-
-Usage:
-  sudo $0 download
-  sudo $0 install
-  sudo reboot
-  sudo $0 verify
-  sudo $0 report
-  sudo $0 inspect
-  sudo $0 recover
-
-Commands:
-  download  Validate enabled repositories and download updates locally.
-  install   Install updates from the local repository only.
-  verify    Automatically verify the post-reboot state.
-  report    Generate and display the patch execution report.
-  inspect   Inspect a run's status, failure phase, and recovery guidance.
-  recover   Validate and resume an interrupted local package installation.
-
-Supported:
-  Rocky Linux / RHEL / AlmaLinux / Oracle Linux 8 and 9 (DNF4)
-  Rocky Linux 10 (gated; DNF4 and x86-64-v3 checks required)
-
-EOF
+            show_usage
             exit 1
             ;;
     esac
