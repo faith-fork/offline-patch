@@ -18,6 +18,8 @@ The gated path accepts Rocky Linux 10 only, requires DNF4, and rejects DNF5 beca
 
 The default RPM repository path is `/usr/local/src`. Run state and reports are stored under `/var/lib/offline-patching/<hostname>`. A lock file prevents two copies of this script from running at the same time.
 
+Before downloading updates, the script asks DNF for a transaction-size estimate without applying it, then checks free space on the filesystems containing the selected package repository and run-state directory. The repository filesystem must have the estimated download size plus a 30% buffer and a 1 GiB reserve; the run-state filesystem must have at least 512 MiB free. These defaults can be adjusted near the top of the script. The check is recorded in the text and HTML reports, along with its estimate and available space. A later process can still consume space, so this is a preflight estimate rather than a guarantee.
+
 ## Linux pre-patch baseline
 
 Before installing or recovering packages, the script records a root-only Linux baseline in the selected run's state directory. It archives selected host, DNS, network, storage, firewall, sysctl, and boot configuration from `/etc`, and captures host/kernel identity, `df -hT`, `lsblk`, mount points, IP addresses, IPv4 and IPv6 routes, policy rules, active NetworkManager connections (when available), failed systemd units, and the default target.
